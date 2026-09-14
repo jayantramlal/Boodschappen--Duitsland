@@ -71,7 +71,7 @@ jobs:
       - name: APK bewaren
         uses: actions/upload-artifact@v4
         with:
-          name: Boodschappen-Duitsland-APK-1.0.2
+          name: Boodschappen-Duitsland-APK-1.0.3
           path: artifact/*
           if-no-files-found: error
           retention-days: 90
