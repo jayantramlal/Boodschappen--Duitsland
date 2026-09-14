@@ -16,6 +16,8 @@ jobs:
 
     env:
       GRADLE_VERSION: "9.6.0"
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - name: Repository ophalen
@@ -27,85 +29,218 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Android SDK instellen
-        uses: android-actions/setup-android@v3
+      - name: Android command-line tools installeren
+        shell: bash
+        run: |
+          set -e
+
+          TOOLS_ZIP="/tmp/android-commandline-tools.zip"
+          TOOLS_TMP="/tmp/android-commandline-tools"
+
+          rm -f "$TOOLS_ZIP"
+          rm -rf "$TOOLS_TMP"
+
+          echo "Android command-line tools downloaden..."
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            --output "$TOOLS_ZIP" \
+            "https://dl.google.com/android/repository/commandlinetools-linux-12266719_latest.zip"
+
+          mkdir -p "$TOOLS_TMP"
+
+          unzip -q "$TOOLS_ZIP" -d "$TOOLS_TMP"
+
+          rm -rf "$ANDROID_HOME/cmdline-tools/16.0"
+
+          mkdir -p "$ANDROID_HOME/cmdline-tools/16.0"
+
+          cp -R \
+            "$TOOLS_TMP/cmdline-tools/." \
+            "$ANDROID_HOME/cmdline-tools/16.0/"
+
+          echo "$ANDROID_HOME/cmdline-tools/16.0/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+          "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" \
+            --version
 
       - name: Android SDK 37 installeren
+        shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
+          set -e
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager"
+
+          echo "Benodigde Android SDK pakketten installeren..."
+
+          yes | "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
             "platforms;android-37.0" \
             "build-tools;37.0.0" \
             --channel=3
 
+          echo
+          echo "Android SDK installatie voltooid."
+
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            --list_installed
+
       - name: Gradle 9.6.0 installeren
         shell: bash
         run: |
           set -e
+
           GRADLE_ZIP="/tmp/gradle-${GRADLE_VERSION}-bin.zip"
           GRADLE_DIR="$HOME/gradle"
+
           rm -rf "$GRADLE_DIR"
           rm -f "$GRADLE_ZIP"
 
-          if ! curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
-            --connect-timeout 30 --output "$GRADLE_ZIP" \
+          echo "Gradle ${GRADLE_VERSION} downloaden..."
+
+          if ! curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            --output "$GRADLE_ZIP" \
             "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
           then
+            echo "Eerste Gradle-server mislukt. Tweede server proberen..."
+
             rm -f "$GRADLE_ZIP"
-            curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
-              --connect-timeout 30 --output "$GRADLE_ZIP" \
+
+            curl \
+              --fail \
+              --location \
+              --retry 5 \
+              --retry-delay 5 \
+              --retry-all-errors \
+              --connect-timeout 30 \
+              --output "$GRADLE_ZIP" \
               "https://downloads.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
           fi
 
           unzip -t "$GRADLE_ZIP" >/dev/null
+
           mkdir -p "$GRADLE_DIR"
+
           unzip -q "$GRADLE_ZIP" -d "$GRADLE_DIR"
+
           echo "$GRADLE_DIR/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
+
+          echo
+          echo "Gradle succesvol geïnstalleerd."
+
+      - name: Gradle controleren
+        shell: bash
+        run: |
+          set -e
+
+          gradle --version
 
       - name: Nieuwste broncode ZIP uitpakken
         shell: bash
         run: |
           set -e
-          SOURCE_ZIP=$(find . -maxdepth 1 -type f \
+
+          SOURCE_ZIP=$(find . \
+            -maxdepth 1 \
+            -type f \
             -name 'BoodschappenDuitsland-Android-*-source.zip' \
-            | sort -V | tail -n 1)
+            | sort -V \
+            | tail -n 1)
 
           if [ -z "$SOURCE_ZIP" ]; then
             echo "FOUT: Geen broncode ZIP gevonden."
+            echo
+            echo "Bestanden in repository:"
             ls -la
             exit 1
           fi
 
+          echo "Broncode gevonden:"
+          echo "$SOURCE_ZIP"
+
           rm -rf extracted
+
           mkdir extracted
+
           unzip -q "$SOURCE_ZIP" -d extracted
 
           SETTINGS_FILE=$(find extracted \
             \( -name "settings.gradle.kts" -o -name "settings.gradle" \) \
-            -type f | head -n 1)
+            -type f \
+            | head -n 1)
 
           if [ -z "$SETTINGS_FILE" ]; then
             echo "FOUT: Android project niet gevonden."
+            echo
+            echo "Uitgepakte bestanden:"
+            find extracted -maxdepth 7 -type f | sort
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo
+          echo "Android project gevonden:"
+          echo "$PROJECT_DIR"
+
+      - name: Broncode controleren
+        shell: bash
+        run: |
+          set -e
+
+          echo "Projectmap:"
+          echo "$PROJECT_DIR"
+
+          echo
+          echo "Android buildbestand controleren:"
+
+          if [ -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            grep -n "applicationId" "$PROJECT_DIR/app/build.gradle.kts" || true
+            grep -n "versionCode" "$PROJECT_DIR/app/build.gradle.kts" || true
+            grep -n "versionName" "$PROJECT_DIR/app/build.gradle.kts" || true
+          fi
 
       - name: Unit tests uitvoeren
         shell: bash
         run: |
           set -e
+
           cd "$PROJECT_DIR"
-          gradle :app:testDebugUnitTest --stacktrace --console=plain --no-daemon
+
+          gradle \
+            :app:testDebugUnitTest \
+            --stacktrace \
+            --console=plain \
+            --no-daemon
 
       - name: Release lint uitvoeren
         shell: bash
         run: |
           set -e
+
           cd "$PROJECT_DIR"
-          gradle :app:lintRelease --stacktrace --console=plain --no-daemon
+
+          gradle \
+            :app:lintRelease \
+            --stacktrace \
+            --console=plain \
+            --no-daemon
 
       - name: Release signing bundle herstellen
         shell: bash
@@ -120,11 +255,27 @@ jobs:
           fi
 
           BUNDLE="/tmp/android-release-bundle.tar.gz"
-          printf '%s' "$ANDROID_RELEASE_BUNDLE_BASE64" | base64 --decode > "$BUNDLE"
+
+          printf '%s' "$ANDROID_RELEASE_BUNDLE_BASE64" \
+            | base64 --decode \
+            > "$BUNDLE"
+
+          if [ ! -s "$BUNDLE" ]; then
+            echo "FOUT: Release signing bundle kon niet worden gemaakt."
+            exit 1
+          fi
+
           tar -xzf "$BUNDLE" -C "$PROJECT_DIR/app"
 
-          test -s "$PROJECT_DIR/app/release.jks"
-          test -s "$PROJECT_DIR/app/signing.env"
+          if [ ! -s "$PROJECT_DIR/app/release.jks" ]; then
+            echo "FOUT: release.jks ontbreekt in signing bundle."
+            exit 1
+          fi
+
+          if [ ! -s "$PROJECT_DIR/app/signing.env" ]; then
+            echo "FOUT: signing.env ontbreekt in signing bundle."
+            exit 1
+          fi
 
           echo "Release signing bundle succesvol hersteld."
 
@@ -132,13 +283,32 @@ jobs:
         shell: bash
         run: |
           set -e
+
           cd "$PROJECT_DIR/app"
+
           set -a
           . ./signing.env
           set +a
+
           cd ..
 
-          gradle :app:assembleRelease \
+          if [ -z "$RELEASE_STORE_PASSWORD" ]; then
+            echo "FOUT: RELEASE_STORE_PASSWORD ontbreekt."
+            exit 1
+          fi
+
+          if [ -z "$RELEASE_KEY_ALIAS" ]; then
+            echo "FOUT: RELEASE_KEY_ALIAS ontbreekt."
+            exit 1
+          fi
+
+          if [ -z "$RELEASE_KEY_PASSWORD" ]; then
+            echo "FOUT: RELEASE_KEY_PASSWORD ontbreekt."
+            exit 1
+          fi
+
+          gradle \
+            :app:assembleRelease \
             --stacktrace \
             --console=plain \
             --no-daemon \
@@ -151,32 +321,74 @@ jobs:
         shell: bash
         run: |
           set -e
-          APK=$(find "$PROJECT_DIR/app/build/outputs/apk/release" \
-            -type f -name "*.apk" | head -n 1)
+
+          APK=$(find \
+            "$PROJECT_DIR/app/build/outputs/apk/release" \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "FOUT: Geen release APK gevonden."
             exit 1
           fi
 
-          "$ANDROID_HOME/build-tools/37.0.0/apksigner" \
-            verify --verbose --print-certs "$APK" \
+          echo "Release APK gevonden:"
+          echo "$APK"
+
+          APKSIGNER="$ANDROID_HOME/build-tools/37.0.0/apksigner"
+
+          if [ ! -x "$APKSIGNER" ]; then
+            echo "FOUT: apksigner niet gevonden."
+            exit 1
+          fi
+
+          "$APKSIGNER" \
+            verify \
+            --verbose \
+            --print-certs \
+            "$APK" \
             | tee /tmp/signing-certificate.txt
 
       - name: Releasebestanden verzamelen
         shell: bash
         run: |
           set -e
-          APK=$(find "$PROJECT_DIR/app/build/outputs/apk/release" \
-            -type f -name "*.apk" | head -n 1)
+
+          APK=$(find \
+            "$PROJECT_DIR/app/build/outputs/apk/release" \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "FOUT: Release APK niet gevonden."
+            exit 1
+          fi
 
           rm -rf release-output
+
           mkdir release-output
 
-          cp "$APK" release-output/Boodschappen-Duitsland-1.0.1-release.apk
-          sha256sum release-output/Boodschappen-Duitsland-1.0.1-release.apk \
+          cp \
+            "$APK" \
+            release-output/Boodschappen-Duitsland-1.0.1-release.apk
+
+          sha256sum \
+            release-output/Boodschappen-Duitsland-1.0.1-release.apk \
             > release-output/SHA256SUMS.txt
-          cp /tmp/signing-certificate.txt release-output/SIGNING-CERTIFICATE.txt
+
+          cp \
+            /tmp/signing-certificate.txt \
+            release-output/SIGNING-CERTIFICATE.txt
+
+          echo
+          echo "Releasebestanden:"
+          ls -lh release-output
+
+          echo
+          echo "SHA-256:"
+          cat release-output/SHA256SUMS.txt
 
       - name: Definitieve APK klaarzetten
         uses: actions/upload-artifact@v4
