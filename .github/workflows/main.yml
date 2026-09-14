@@ -77,6 +77,7 @@ jobs:
           unzip -t "$GRADLE_ZIP" > /dev/null
 
           mkdir -p "$GRADLE_DIR"
+
           unzip -q "$GRADLE_ZIP" -d "$GRADLE_DIR"
 
           echo "$GRADLE_DIR/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
@@ -125,7 +126,7 @@ jobs:
             | head -n 1)
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "FOUT: settings.gradle of settings.gradle.kts niet gevonden."
+            echo "FOUT: Android project niet gevonden."
             find extracted -maxdepth 7 -type f | sort
             exit 1
           fi
@@ -137,89 +138,102 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Barcode callback fouten herstellen
+      - name: Barcode callbacks herstellen
         shell: bash
         run: |
           set -e
 
           python3 <<'PY'
           import os
+          import re
           from pathlib import Path
 
           project = Path(os.environ["PROJECT_DIR"])
 
-          matches = list(project.rglob("Screens.kt"))
+          files = list(project.rglob("Screens.kt"))
 
-          if not matches:
-              raise SystemExit("FOUT: Screens.kt niet gevonden.")
+          if not files:
+              raise SystemExit(
+                  "FOUT: Screens.kt niet gevonden."
+              )
 
-          file = matches[0]
+          file = files[0]
 
           print("Screens.kt gevonden:")
           print(file)
 
-          lines = file.read_text(encoding="utf-8").splitlines()
+          text = file.read_text(encoding="utf-8")
 
-          target_lines = [84, 97, 112]
-          changed = 0
+          print()
+          print("Gevonden launchScanner verwijzingen:")
 
-          for number in target_lines:
-              index = number - 1
+          for number, line in enumerate(text.splitlines(), 1):
+              if "launchScanner" in line:
+                  print(f"{number}: {line}")
 
-              if index >= len(lines):
-                  raise SystemExit(
-                      f"FOUT: regel {number} bestaat niet in Screens.kt."
-                  )
+          pattern = re.compile(
+              r'onScan\s*=\s*launchScanner\s*,'
+          )
 
-              line = lines[index]
+          matches = pattern.findall(text)
 
-              print()
-              print(f"Originele regel {number}:")
-              print(line)
-
-              if "startScan()" not in line:
-                  raise SystemExit(
-                      f"VEILIGHEIDSSTOP: regel {number} bevat geen startScan(). "
-                      "Broncode wijkt af van de onderzochte build."
-                  )
-
-              if "; Unit" in line:
-                  print("Regel was al gecorrigeerd.")
-                  continue
-
-              closing_brace = line.rfind("}")
-
-              if closing_brace == -1:
-                  raise SystemExit(
-                      f"VEILIGHEIDSSTOP: regel {number} kan niet veilig "
-                      "automatisch worden aangepast."
-                  )
-
-              line = (
-                  line[:closing_brace]
-                  + "; Unit "
-                  + line[closing_brace:]
+          already_fixed = len(
+              re.findall(
+                  r'onScan\s*=\s*\{\s*launchScanner\(\)\s*;\s*Unit\s*\}\s*,',
+                  text
               )
-
-              lines[index] = line
-              changed += 1
-
-              print(f"Nieuwe regel {number}:")
-              print(line)
-
-          file.write_text(
-              "\n".join(lines) + "\n",
-              encoding="utf-8"
           )
 
           print()
-          print(f"Aantal gecorrigeerde regels: {changed}")
+          print(
+              f"Nog te repareren callbacks: {len(matches)}"
+          )
+          print(
+              f"Al gerepareerde callbacks: {already_fixed}"
+          )
 
-          if changed not in (0, 3):
-              raise SystemExit(
-                  "VEILIGHEIDSSTOP: niet exact alle drie de scanner-callbacks "
-                  "konden worden gecorrigeerd."
+          if len(matches) == 3:
+              text, replacements = pattern.subn(
+                  'onScan = { launchScanner(); Unit },',
+                  text
               )
+
+              if replacements != 3:
+                  raise SystemExit(
+                      "VEILIGHEIDSSTOP: niet exact 3 callbacks aangepast."
+                  )
+
+              file.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+
+              print()
+              print("3 barcode callbacks succesvol gerepareerd.")
+
+          elif len(matches) == 0 and already_fixed == 3:
+              print()
+              print("Barcode callbacks waren al correct.")
+
+          else:
+              raise SystemExit(
+                  "VEILIGHEIDSSTOP: verwacht 3 callbacks, "
+                  f"maar vond {len(matches)} niet-gerepareerde "
+                  f"en {already_fixed} gerepareerde callbacks."
+              )
+
+          check = file.read_text(encoding="utf-8")
+
+          remaining = pattern.findall(check)
+
+          if remaining:
+              raise SystemExit(
+                  "FOUT: er zijn nog ongerepareerde "
+                  "onScan = launchScanner callbacks aanwezig."
+              )
+
+          print()
+          print("Callbackcontrole geslaagd.")
           PY
 
       - name: Android project controleren
@@ -247,6 +261,7 @@ jobs:
 
           gradle :app:assembleDebug \
             --stacktrace \
+            --console=plain \
             --no-daemon
 
       - name: APK zoeken en verzamelen
@@ -277,12 +292,12 @@ jobs:
             | wc -l)
 
           if [ "$APK_COUNT" -eq 0 ]; then
-            echo "FOUT: Build uitgevoerd, maar geen APK gevonden."
+            echo "FOUT: Build voltooid zonder APK."
             exit 1
           fi
 
           echo
-          echo "$APK_COUNT APK-bestand(en) succesvol gevonden."
+          echo "$APK_COUNT APK-bestand(en) gevonden."
 
       - name: APK klaarzetten
         uses: actions/upload-artifact@v4
