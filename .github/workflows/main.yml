@@ -20,30 +20,83 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Android SDK instellen
+        uses: android-actions/setup-android@v3
+
+      - name: Android SDK 37 installeren
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "platforms;android-37"
+
+      - name: Gradle 9.6.0 installeren
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
       - name: Broncode uitpakken
         run: |
           rm -rf extracted
           mkdir extracted
           unzip -q BoodschappenDuitsland-Android-1.0.0-source.zip -d extracted
 
-      - name: APK bouwen
-        run: |
-          GRADLEW=$(find extracted -type f -name gradlew | head -n 1)
+          echo "Broncode uitgepakt."
+          find extracted -maxdepth 4 -type f | sort | head -100
 
-          if [ -z "$GRADLEW" ]; then
-            echo "FOUT: gradlew niet gevonden in de broncode."
+      - name: Android project zoeken
+        run: |
+          SETTINGS_FILE=$(find extracted \
+            \( -name "settings.gradle.kts" -o -name "settings.gradle" \) \
+            -type f | head -n 1)
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "FOUT: settings.gradle of settings.gradle.kts niet gevonden."
+            echo "Aanwezige bestanden:"
+            find extracted -maxdepth 5 -type f | sort
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$GRADLEW")
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+
+          echo "Android project gevonden in: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Gradle controleren
+        run: |
+          cd "$PROJECT_DIR"
+          gradle --version
+
+      - name: APK bouwen
+        run: |
           cd "$PROJECT_DIR"
 
-          chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          gradle :app:assembleDebug \
+            --stacktrace \
+            --no-daemon
+
+      - name: APK controleren en verzamelen
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/apk-output"
+
+          find "$PROJECT_DIR" \
+            -type f \
+            -path "*/build/outputs/apk/debug/*.apk" \
+            -exec cp {} "$GITHUB_WORKSPACE/apk-output/" \;
+
+          echo "Gevonden APK-bestanden:"
+          find "$GITHUB_WORKSPACE/apk-output" -type f -name "*.apk" -print
+
+          APK_COUNT=$(find "$GITHUB_WORKSPACE/apk-output" \
+            -type f -name "*.apk" | wc -l)
+
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "FOUT: De build is uitgevoerd maar er is geen APK gevonden."
+            exit 1
+          fi
 
       - name: APK klaarzetten
         uses: actions/upload-artifact@v4
         with:
-          name: Boodschappen-Duitsland-APK
-          path: extracted/**/build/outputs/apk/**/*.apk
+          name: Boodschappen-Duitsland-1.0.0-APK
+          path: apk-output/*.apk
           if-no-files-found: error
+          retention-days: 30
