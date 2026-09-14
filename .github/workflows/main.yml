@@ -59,7 +59,7 @@ jobs:
             --output "$GRADLE_ZIP" \
             "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
           then
-            echo "Eerste server mislukt. Tweede server proberen..."
+            echo "Eerste Gradle-server mislukt. Tweede server proberen..."
 
             rm -f "$GRADLE_ZIP"
 
@@ -153,9 +153,7 @@ jobs:
           files = list(project.rglob("Screens.kt"))
 
           if not files:
-              raise SystemExit(
-                  "FOUT: Screens.kt niet gevonden."
-              )
+              raise SystemExit("FOUT: Screens.kt niet gevonden.")
 
           file = files[0]
 
@@ -165,75 +163,105 @@ jobs:
           text = file.read_text(encoding="utf-8")
 
           print()
-          print("Gevonden launchScanner verwijzingen:")
+          print("Alle launchScanner verwijzingen:")
 
           for number, line in enumerate(text.splitlines(), 1):
               if "launchScanner" in line:
                   print(f"{number}: {line}")
 
           pattern = re.compile(
-              r'onScan\s*=\s*launchScanner\s*,'
+              r'\b(onScan|onScanNext)\s*=\s*launchScanner(\s*,?)'
           )
 
-          matches = pattern.findall(text)
-
-          already_fixed = len(
-              re.findall(
-                  r'onScan\s*=\s*\{\s*launchScanner\(\)\s*;\s*Unit\s*\}\s*,',
-                  text
-              )
+          already_fixed_pattern = re.compile(
+              r'\b(onScan|onScanNext)\s*=\s*'
+              r'\{\s*launchScanner\(\)\s*;\s*Unit\s*\}'
           )
+
+          matches = list(pattern.finditer(text))
+          already_fixed = list(already_fixed_pattern.finditer(text))
 
           print()
-          print(
-              f"Nog te repareren callbacks: {len(matches)}"
-          )
-          print(
-              f"Al gerepareerde callbacks: {already_fixed}"
-          )
+          print(f"Nog te repareren callbacks: {len(matches)}")
+          print(f"Al gerepareerde callbacks: {len(already_fixed)}")
 
-          if len(matches) == 3:
+          total = len(matches) + len(already_fixed)
+
+          if total != 3:
+              raise SystemExit(
+                  "VEILIGHEIDSSTOP: verwacht in totaal precies 3 "
+                  "barcode-callbacks, maar vond "
+                  f"{len(matches)} niet-gerepareerde en "
+                  f"{len(already_fixed)} gerepareerde callbacks."
+              )
+
+          if matches:
+              def replace_callback(match):
+                  callback_name = match.group(1)
+                  trailing = match.group(2)
+
+                  return (
+                      f"{callback_name} = "
+                      "{ launchScanner(); Unit }"
+                      f"{trailing}"
+                  )
+
               text, replacements = pattern.subn(
-                  'onScan = { launchScanner(); Unit },',
+                  replace_callback,
                   text
               )
 
-              if replacements != 3:
-                  raise SystemExit(
-                      "VEILIGHEIDSSTOP: niet exact 3 callbacks aangepast."
-                  )
+              print()
+              print(
+                  f"Aantal automatisch gerepareerde callbacks: "
+                  f"{replacements}"
+              )
 
               file.write_text(
                   text,
                   encoding="utf-8"
               )
 
-              print()
-              print("3 barcode callbacks succesvol gerepareerd.")
-
-          elif len(matches) == 0 and already_fixed == 3:
-              print()
-              print("Barcode callbacks waren al correct.")
-
-          else:
-              raise SystemExit(
-                  "VEILIGHEIDSSTOP: verwacht 3 callbacks, "
-                  f"maar vond {len(matches)} niet-gerepareerde "
-                  f"en {already_fixed} gerepareerde callbacks."
-              )
-
           check = file.read_text(encoding="utf-8")
 
-          remaining = pattern.findall(check)
+          remaining = list(pattern.finditer(check))
+
+          fixed_after = list(
+              already_fixed_pattern.finditer(check)
+          )
+
+          print()
+          print(
+              f"Callbacks na reparatie: {len(fixed_after)}"
+          )
 
           if remaining:
               raise SystemExit(
                   "FOUT: er zijn nog ongerepareerde "
-                  "onScan = launchScanner callbacks aanwezig."
+                  "barcode callbacks aanwezig."
+              )
+
+          if len(fixed_after) != 3:
+              raise SystemExit(
+                  "FOUT: na reparatie zijn niet exact "
+                  "3 callbacks correct."
               )
 
           print()
-          print("Callbackcontrole geslaagd.")
+          print("Alle 3 barcode callbacks zijn correct hersteld.")
+
+          print()
+          print("Controle van aangepaste regels:")
+
+          for number, line in enumerate(
+              check.splitlines(),
+              1
+          ):
+              if (
+                  "onScan =" in line
+                  or "onScanNext =" in line
+              ):
+                  print(f"{number}: {line}")
           PY
 
       - name: Android project controleren
@@ -292,12 +320,12 @@ jobs:
             | wc -l)
 
           if [ "$APK_COUNT" -eq 0 ]; then
-            echo "FOUT: Build voltooid zonder APK."
+            echo "FOUT: Build uitgevoerd, maar geen APK gevonden."
             exit 1
           fi
 
           echo
-          echo "$APK_COUNT APK-bestand(en) gevonden."
+          echo "$APK_COUNT APK-bestand(en) succesvol gevonden."
 
       - name: APK klaarzetten
         uses: actions/upload-artifact@v4
