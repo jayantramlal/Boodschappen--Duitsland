@@ -59,7 +59,7 @@ jobs:
             --output "$GRADLE_ZIP" \
             "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
           then
-            echo "Eerste Gradle-server mislukt. Tweede server proberen..."
+            echo "Eerste server mislukt. Tweede server proberen..."
 
             rm -f "$GRADLE_ZIP"
 
@@ -74,16 +74,12 @@ jobs:
               "https://downloads.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
           fi
 
-          echo "Gradle ZIP controleren..."
-
           unzip -t "$GRADLE_ZIP" > /dev/null
 
           mkdir -p "$GRADLE_DIR"
-
           unzip -q "$GRADLE_ZIP" -d "$GRADLE_DIR"
 
           echo "$GRADLE_DIR/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
-
           echo "GRADLE_HOME=$GRADLE_DIR/gradle-${GRADLE_VERSION}" >> "$GITHUB_ENV"
 
       - name: Gradle controleren
@@ -104,7 +100,6 @@ jobs:
 
           if [ -z "$SOURCE_ZIP" ]; then
             echo "FOUT: Geen broncode ZIP gevonden."
-            echo "Bestanden in repository:"
             ls -la
             exit 1
           fi
@@ -131,18 +126,101 @@ jobs:
 
           if [ -z "$SETTINGS_FILE" ]; then
             echo "FOUT: settings.gradle of settings.gradle.kts niet gevonden."
-            echo
-            echo "Bestanden in uitgepakte broncode:"
             find extracted -maxdepth 7 -type f | sort
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
 
-          echo "Android project gevonden in:"
+          echo "Android project gevonden:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Barcode callback fouten herstellen
+        shell: bash
+        run: |
+          set -e
+
+          python3 <<'PY'
+          import os
+          from pathlib import Path
+
+          project = Path(os.environ["PROJECT_DIR"])
+
+          matches = list(project.rglob("Screens.kt"))
+
+          if not matches:
+              raise SystemExit("FOUT: Screens.kt niet gevonden.")
+
+          file = matches[0]
+
+          print("Screens.kt gevonden:")
+          print(file)
+
+          lines = file.read_text(encoding="utf-8").splitlines()
+
+          target_lines = [84, 97, 112]
+          changed = 0
+
+          for number in target_lines:
+              index = number - 1
+
+              if index >= len(lines):
+                  raise SystemExit(
+                      f"FOUT: regel {number} bestaat niet in Screens.kt."
+                  )
+
+              line = lines[index]
+
+              print()
+              print(f"Originele regel {number}:")
+              print(line)
+
+              if "startScan()" not in line:
+                  raise SystemExit(
+                      f"VEILIGHEIDSSTOP: regel {number} bevat geen startScan(). "
+                      "Broncode wijkt af van de onderzochte build."
+                  )
+
+              if "; Unit" in line:
+                  print("Regel was al gecorrigeerd.")
+                  continue
+
+              closing_brace = line.rfind("}")
+
+              if closing_brace == -1:
+                  raise SystemExit(
+                      f"VEILIGHEIDSSTOP: regel {number} kan niet veilig "
+                      "automatisch worden aangepast."
+                  )
+
+              line = (
+                  line[:closing_brace]
+                  + "; Unit "
+                  + line[closing_brace:]
+              )
+
+              lines[index] = line
+              changed += 1
+
+              print(f"Nieuwe regel {number}:")
+              print(line)
+
+          file.write_text(
+              "\n".join(lines) + "\n",
+              encoding="utf-8"
+          )
+
+          print()
+          print(f"Aantal gecorrigeerde regels: {changed}")
+
+          if changed not in (0, 3):
+              raise SystemExit(
+                  "VEILIGHEIDSSTOP: niet exact alle drie de scanner-callbacks "
+                  "konden worden gecorrigeerd."
+              )
+          PY
 
       - name: Android project controleren
         shell: bash
@@ -151,10 +229,6 @@ jobs:
 
           echo "Projectmap:"
           echo "$PROJECT_DIR"
-
-          echo
-          echo "Bestanden:"
-          ls -la "$PROJECT_DIR"
 
           echo
           echo "Gradle:"
@@ -191,6 +265,7 @@ jobs:
             -exec cp {} "$OUTPUT_DIR/" \;
 
           echo "Gevonden APK-bestanden:"
+
           find "$OUTPUT_DIR" \
             -type f \
             -name "*.apk" \
@@ -202,7 +277,7 @@ jobs:
             | wc -l)
 
           if [ "$APK_COUNT" -eq 0 ]; then
-            echo "FOUT: De Android-build is uitgevoerd, maar er is geen APK gevonden."
+            echo "FOUT: Build uitgevoerd, maar geen APK gevonden."
             exit 1
           fi
 
