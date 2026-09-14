@@ -1,4 +1,4 @@
-name: Bouw Android APK
+name: Bouw definitieve Android Release APK
 
 on:
   workflow_dispatch:
@@ -6,18 +6,22 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
 
     env:
       GRADLE_VERSION: "9.6.0"
 
     steps:
-      - name: Broncode ophalen
+      - name: Repository ophalen
         uses: actions/checkout@v4
 
-      - name: Java installeren
+      - name: Java 17 installeren
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -28,7 +32,7 @@ jobs:
 
       - name: Android SDK 37 installeren
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
+          yes | sdkmanager --licenses >/dev/null || true
 
           sdkmanager \
             "platform-tools" \
@@ -74,20 +78,14 @@ jobs:
               "https://downloads.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
           fi
 
-          unzip -t "$GRADLE_ZIP" > /dev/null
+          unzip -t "$GRADLE_ZIP" >/dev/null
 
           mkdir -p "$GRADLE_DIR"
-
           unzip -q "$GRADLE_ZIP" -d "$GRADLE_DIR"
 
           echo "$GRADLE_DIR/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
-          echo "GRADLE_HOME=$GRADLE_DIR/gradle-${GRADLE_VERSION}" >> "$GITHUB_ENV"
 
-      - name: Gradle controleren
-        run: |
-          gradle --version
-
-      - name: Broncode ZIP zoeken en uitpakken
+      - name: Nieuwste broncode ZIP uitpakken
         shell: bash
         run: |
           set -e
@@ -113,13 +111,6 @@ jobs:
 
           unzip -q "$SOURCE_ZIP" -d extracted
 
-          echo "Broncode succesvol uitgepakt."
-
-      - name: Android project zoeken
-        shell: bash
-        run: |
-          set -e
-
           SETTINGS_FILE=$(find extracted \
             \( -name "settings.gradle.kts" -o -name "settings.gradle" \) \
             -type f \
@@ -133,138 +124,12 @@ jobs:
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
 
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
           echo "Android project gevonden:"
           echo "$PROJECT_DIR"
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Barcode callbacks herstellen
-        shell: bash
-        run: |
-          set -e
-
-          python3 <<'PY'
-          import os
-          import re
-          from pathlib import Path
-
-          project = Path(os.environ["PROJECT_DIR"])
-
-          files = list(project.rglob("Screens.kt"))
-
-          if not files:
-              raise SystemExit("FOUT: Screens.kt niet gevonden.")
-
-          file = files[0]
-
-          print("Screens.kt gevonden:")
-          print(file)
-
-          text = file.read_text(encoding="utf-8")
-
-          print()
-          print("Alle launchScanner verwijzingen:")
-
-          for number, line in enumerate(text.splitlines(), 1):
-              if "launchScanner" in line:
-                  print(f"{number}: {line}")
-
-          pattern = re.compile(
-              r'\b(onScan|onScanNext)\s*=\s*launchScanner(\s*,?)'
-          )
-
-          already_fixed_pattern = re.compile(
-              r'\b(onScan|onScanNext)\s*=\s*'
-              r'\{\s*launchScanner\(\)\s*;\s*Unit\s*\}'
-          )
-
-          matches = list(pattern.finditer(text))
-          already_fixed = list(already_fixed_pattern.finditer(text))
-
-          print()
-          print(f"Nog te repareren callbacks: {len(matches)}")
-          print(f"Al gerepareerde callbacks: {len(already_fixed)}")
-
-          total = len(matches) + len(already_fixed)
-
-          if total != 3:
-              raise SystemExit(
-                  "VEILIGHEIDSSTOP: verwacht in totaal precies 3 "
-                  "barcode-callbacks, maar vond "
-                  f"{len(matches)} niet-gerepareerde en "
-                  f"{len(already_fixed)} gerepareerde callbacks."
-              )
-
-          if matches:
-              def replace_callback(match):
-                  callback_name = match.group(1)
-                  trailing = match.group(2)
-
-                  return (
-                      f"{callback_name} = "
-                      "{ launchScanner(); Unit }"
-                      f"{trailing}"
-                  )
-
-              text, replacements = pattern.subn(
-                  replace_callback,
-                  text
-              )
-
-              print()
-              print(
-                  f"Aantal automatisch gerepareerde callbacks: "
-                  f"{replacements}"
-              )
-
-              file.write_text(
-                  text,
-                  encoding="utf-8"
-              )
-
-          check = file.read_text(encoding="utf-8")
-
-          remaining = list(pattern.finditer(check))
-
-          fixed_after = list(
-              already_fixed_pattern.finditer(check)
-          )
-
-          print()
-          print(
-              f"Callbacks na reparatie: {len(fixed_after)}"
-          )
-
-          if remaining:
-              raise SystemExit(
-                  "FOUT: er zijn nog ongerepareerde "
-                  "barcode callbacks aanwezig."
-              )
-
-          if len(fixed_after) != 3:
-              raise SystemExit(
-                  "FOUT: na reparatie zijn niet exact "
-                  "3 callbacks correct."
-              )
-
-          print()
-          print("Alle 3 barcode callbacks zijn correct hersteld.")
-
-          print()
-          print("Controle van aangepaste regels:")
-
-          for number, line in enumerate(
-              check.splitlines(),
-              1
-          ):
-              if (
-                  "onScan =" in line
-                  or "onScanNext =" in line
-              ):
-                  print(f"{number}: {line}")
-          PY
-
-      - name: Android project controleren
+      - name: Broncode controleren
         shell: bash
         run: |
           set -e
@@ -273,64 +138,164 @@ jobs:
           echo "$PROJECT_DIR"
 
           echo
+          echo "Versiecontrole:"
+          grep -n "applicationId" "$PROJECT_DIR/app/build.gradle.kts"
+          grep -n "versionCode" "$PROJECT_DIR/app/build.gradle.kts"
+          grep -n "versionName" "$PROJECT_DIR/app/build.gradle.kts"
+
+          echo
           echo "Gradle:"
           gradle --version
 
-          echo
-          echo "Android SDK:"
-          echo "$ANDROID_HOME"
-
-      - name: APK bouwen
+      - name: Unit tests uitvoeren
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          gradle :app:assembleDebug \
+          gradle \
+            :app:testDebugUnitTest \
             --stacktrace \
             --console=plain \
             --no-daemon
 
-      - name: APK zoeken en verzamelen
+      - name: Release lint uitvoeren
         shell: bash
         run: |
           set -e
 
-          OUTPUT_DIR="$GITHUB_WORKSPACE/apk-output"
+          cd "$PROJECT_DIR"
 
-          rm -rf "$OUTPUT_DIR"
-          mkdir -p "$OUTPUT_DIR"
+          gradle \
+            :app:lintRelease \
+            --stacktrace \
+            --console=plain \
+            --no-daemon
 
-          find "$PROJECT_DIR" \
-            -type f \
-            -path "*/build/outputs/apk/debug/*.apk" \
-            -exec cp {} "$OUTPUT_DIR/" \;
+      - name: Release signing key herstellen
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -e
 
-          echo "Gevonden APK-bestanden:"
-
-          find "$OUTPUT_DIR" \
-            -type f \
-            -name "*.apk" \
-            -print
-
-          APK_COUNT=$(find "$OUTPUT_DIR" \
-            -type f \
-            -name "*.apk" \
-            | wc -l)
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "FOUT: Build uitgevoerd, maar geen APK gevonden."
+          if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "FOUT: GitHub secret RELEASE_KEYSTORE_BASE64 ontbreekt."
             exit 1
           fi
 
-          echo
-          echo "$APK_COUNT APK-bestand(en) succesvol gevonden."
+          echo "$RELEASE_KEYSTORE_BASE64" \
+            | base64 --decode \
+            > "$PROJECT_DIR/app/release.jks"
 
-      - name: APK klaarzetten
+          if [ ! -s "$PROJECT_DIR/app/release.jks" ]; then
+            echo "FOUT: release.jks kon niet worden hersteld."
+            exit 1
+          fi
+
+          echo "Release-keystore succesvol hersteld."
+
+      - name: Definitieve release APK bouwen
+        shell: bash
+        env:
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -e
+
+          if [ -z "$RELEASE_STORE_PASSWORD" ]; then
+            echo "FOUT: RELEASE_STORE_PASSWORD ontbreekt."
+            exit 1
+          fi
+
+          if [ -z "$RELEASE_KEY_ALIAS" ]; then
+            echo "FOUT: RELEASE_KEY_ALIAS ontbreekt."
+            exit 1
+          fi
+
+          if [ -z "$RELEASE_KEY_PASSWORD" ]; then
+            echo "FOUT: RELEASE_KEY_PASSWORD ontbreekt."
+            exit 1
+          fi
+
+          cd "$PROJECT_DIR"
+
+          gradle \
+            :app:assembleRelease \
+            --stacktrace \
+            --console=plain \
+            --no-daemon \
+            -PreleaseStoreFile=release.jks \
+            -PreleaseStorePassword="$RELEASE_STORE_PASSWORD" \
+            -PreleaseKeyAlias="$RELEASE_KEY_ALIAS" \
+            -PreleaseKeyPassword="$RELEASE_KEY_PASSWORD"
+
+      - name: Release APK controleren
+        shell: bash
+        run: |
+          set -e
+
+          APK=$(find \
+            "$PROJECT_DIR/app/build/outputs/apk/release" \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "FOUT: Geen release APK gevonden."
+            exit 1
+          fi
+
+          echo "Release APK:"
+          echo "$APK"
+
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" \
+            verify \
+            --verbose \
+            --print-certs \
+            "$APK" \
+            | tee /tmp/signing-certificate.txt
+
+      - name: Releasebestanden verzamelen
+        shell: bash
+        run: |
+          set -e
+
+          APK=$(find \
+            "$PROJECT_DIR/app/build/outputs/apk/release" \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          rm -rf release-output
+          mkdir release-output
+
+          cp \
+            "$APK" \
+            release-output/Boodschappen-Duitsland-1.0.1-release.apk
+
+          sha256sum \
+            release-output/Boodschappen-Duitsland-1.0.1-release.apk \
+            > release-output/SHA256SUMS.txt
+
+          cp \
+            /tmp/signing-certificate.txt \
+            release-output/SIGNING-CERTIFICATE.txt
+
+          echo
+          echo "Releasebestanden:"
+          ls -lh release-output
+
+          echo
+          echo "SHA-256:"
+          cat release-output/SHA256SUMS.txt
+
+      - name: Definitieve APK klaarzetten
         uses: actions/upload-artifact@v4
         with:
-          name: Boodschappen-Duitsland-APK
-          path: apk-output/*.apk
+          name: Boodschappen-Duitsland-1.0.1-RELEASE
+          path: release-output/*
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
