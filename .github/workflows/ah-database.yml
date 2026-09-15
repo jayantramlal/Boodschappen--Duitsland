@@ -1,0 +1,604 @@
+name: Maak volledige Albert Heijn database
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  maak-database:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Python installeren
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Volledige Albert Heijn database ophalen
+        shell: bash
+        run: |
+          cat > /tmp/build_ah_database.py <<'PY'
+          #!/usr/bin/env python3
+          """Generate an app-compatible Albert Heijn catalog from the anonymous Appie API.
+          
+          Output schema is compatible with Boodschappen Duitsland 1.0.3.
+          The script deliberately keeps all source metadata in extra fields; the Android
+          importer safely ignores fields it does not use yet.
+          """
+          from __future__ import annotations
+          
+          import hashlib
+          import json
+          import math
+          import os
+          import random
+          import re
+          import sys
+          import time
+          from dataclasses import dataclass
+          from datetime import datetime, timezone
+          from typing import Any, Iterable
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          
+          BASE = "https://api.ah.nl"
+          USER_AGENT = "Appie/8.22.3"
+          PAGE_SIZE = 100
+          HTTP_TIMEOUT = 45
+          MAX_RETRIES = 7
+          REQUEST_PAUSE = 0.08
+          OUTPUT_FILE = os.environ.get("AH_OUTPUT", "Albert_Heijn_volledig.json")
+          REPORT_FILE = os.environ.get("AH_REPORT", "Albert_Heijn_database_rapport.txt")
+          
+          
+          class ApiError(RuntimeError):
+              def __init__(self, message: str, status: int | None = None):
+                  super().__init__(message)
+                  self.status = status
+          
+          
+          @dataclass(frozen=True)
+          class Category:
+              id: int
+              name: str
+          
+          
+          class AhClient:
+              def __init__(self) -> None:
+                  self.token: str | None = None
+                  self.requests = 0
+                  self.retries = 0
+                  self.refresh_token()
+          
+              def refresh_token(self) -> None:
+                  payload = json.dumps({"clientId": "appie"}).encode("utf-8")
+                  req = Request(
+                      BASE + "/mobile-auth/v1/auth/token/anonymous",
+                      data=payload,
+                      method="POST",
+                      headers={
+                          "User-Agent": USER_AGENT,
+                          "Content-Type": "application/json",
+                          "Accept": "application/json",
+                          "X-Application": "AHWEBSHOP",
+                      },
+                  )
+                  last: Exception | None = None
+                  for attempt in range(MAX_RETRIES):
+                      try:
+                          with urlopen(req, timeout=HTTP_TIMEOUT) as response:
+                              body = json.loads(response.read().decode("utf-8"))
+                          token = body.get("access_token") or body.get("accessToken")
+                          if not token:
+                              raise ApiError("AH gaf geen anonymous access token terug")
+                          self.token = str(token)
+                          return
+                      except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ApiError) as exc:
+                          last = exc
+                          if attempt + 1 >= MAX_RETRIES:
+                              break
+                          time.sleep(min(30.0, (1.8 ** attempt) + random.random()))
+                  raise ApiError(f"Anonymous AH-token ophalen mislukt: {last}")
+          
+              def get(self, path: str, params: dict[str, Any] | None = None, *, allow_400: bool = False) -> Any:
+                  if params:
+                      path = path + ("&" if "?" in path else "?") + urlencode(params, doseq=True)
+                  url = BASE + path
+                  refreshed = False
+                  last: Exception | None = None
+                  for attempt in range(MAX_RETRIES):
+                      headers = {
+                          "User-Agent": USER_AGENT,
+                          "Accept": "application/json",
+                          "Content-Type": "application/json",
+                          "X-Application": "AHWEBSHOP",
+                      }
+                      if self.token:
+                          headers["Authorization"] = f"Bearer {self.token}"
+                      req = Request(url, method="GET", headers=headers)
+                      try:
+                          self.requests += 1
+                          with urlopen(req, timeout=HTTP_TIMEOUT) as response:
+                              raw = response.read()
+                          time.sleep(REQUEST_PAUSE)
+                          return json.loads(raw.decode("utf-8"))
+                      except HTTPError as exc:
+                          status = exc.code
+                          last = exc
+                          if status == 401 and not refreshed:
+                              self.refresh_token()
+                              refreshed = True
+                              continue
+                          if status == 400 and allow_400:
+                              raise ApiError(f"HTTP 400 voor {path}", 400)
+                          if status not in (408, 425, 429, 500, 502, 503, 504):
+                              raise ApiError(f"HTTP {status} voor {path}", status)
+                      except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+                          last = exc
+                      if attempt + 1 >= MAX_RETRIES:
+                          break
+                      self.retries += 1
+                      delay = min(45.0, (2.0 ** attempt) + random.random() * 1.5)
+                      print(f"  Tijdelijke API-fout; opnieuw proberen over {delay:.1f}s...", flush=True)
+                      time.sleep(delay)
+                  raise ApiError(f"AH API-aanvraag mislukt voor {path}: {last}")
+          
+          
+          def first_int(d: dict[str, Any], keys: Iterable[str]) -> int | None:
+              for key in keys:
+                  value = d.get(key)
+                  if isinstance(value, bool):
+                      continue
+                  try:
+                      if value is not None and str(value).strip():
+                          return int(value)
+                  except (TypeError, ValueError):
+                      pass
+              return None
+          
+          
+          def first_text(d: dict[str, Any], keys: Iterable[str]) -> str:
+              for key in keys:
+                  value = d.get(key)
+                  if isinstance(value, str) and value.strip():
+                      return value.strip()
+              return ""
+          
+          
+          def direct_category_nodes(payload: Any) -> list[Category]:
+              """Extract direct category-looking objects from known response shapes."""
+              candidate_lists: list[list[Any]] = []
+              if isinstance(payload, list):
+                  candidate_lists.append(payload)
+              elif isinstance(payload, dict):
+                  for key in ("categories", "subCategories", "subcategories", "items", "results", "data"):
+                      value = payload.get(key)
+                      if isinstance(value, list):
+                          candidate_lists.append(value)
+                  if not candidate_lists:
+                      # Some versions wrap the list one object deeper.
+                      for value in payload.values():
+                          if isinstance(value, dict):
+                              for key in ("categories", "subCategories", "subcategories", "items", "results"):
+                                  nested = value.get(key)
+                                  if isinstance(nested, list):
+                                      candidate_lists.append(nested)
+          
+              out: dict[int, Category] = {}
+              for values in candidate_lists:
+                  for item in values:
+                      if not isinstance(item, dict):
+                          continue
+                      cid = first_int(item, ("id", "taxonomyId", "categoryId"))
+                      name = first_text(item, ("name", "title", "label"))
+                      if cid is not None and cid > 0:
+                          out[cid] = Category(cid, name or f"Categorie {cid}")
+              return list(out.values())
+          
+          
+          def to_float(value: Any) -> float | None:
+              if isinstance(value, bool) or value is None:
+                  return None
+              try:
+                  v = float(value)
+                  return v if math.isfinite(v) else None
+              except (TypeError, ValueError):
+                  return None
+          
+          
+          def money(value: float) -> float:
+              return round(float(value) + 1e-9, 2)
+          
+          
+          def parse_bundle_label(label: str, regular: float) -> tuple[str, dict[str, Any], float | None]:
+              """Return (type, extra offer fields, comparable effective unit price)."""
+              text = label.lower().replace(" ", " ").strip()
+              extras: dict[str, Any] = {}
+          
+              m = re.search(r"(\d+)\s*\+\s*(\d+)\s*gratis", text)
+              if m:
+                  paid, free = int(m.group(1)), int(m.group(2))
+                  if paid > 0 and free > 0:
+                      return "buy_x_get_y_free", extras, money(regular * paid / (paid + free))
+          
+              m = re.search(r"(\d+)\s+voor\s+[€]?\s*([0-9]+(?:[.,][0-9]{1,2})?)", text)
+              if m:
+                  qty = int(m.group(1))
+                  total = float(m.group(2).replace(",", "."))
+                  if qty > 0 and total > 0:
+                      extras.update({"quantity": qty, "bundle_price": money(total)})
+                      return "bundle_price", extras, money(total / qty)
+          
+              m = re.search(r"([0-9]{1,2}(?:[.,][0-9]+)?)\s*%\s*(?:korting)?", text)
+              if m:
+                  pct = float(m.group(1).replace(",", "."))
+                  if 0 < pct < 100:
+                      extras["discount_percent"] = pct
+                      return "percentage_discount", extras, money(regular * (100.0 - pct) / 100.0)
+          
+              # Common AH mechanisms that do not match the generic x+y / bundle patterns.
+              if re.search(r"(?:2e|2de|tweede)\s+(?:product\s+)?gratis", text):
+                  return "buy_x_get_y_free", extras, money(regular / 2.0)
+              if re.search(r"(?:3e|3de|derde)\s+(?:product\s+)?gratis", text):
+                  return "buy_x_get_y_free", extras, money(regular * 2.0 / 3.0)
+              if re.search(r"(?:2e|2de|tweede)\s+(?:product\s+)?(?:voor\s+de\s+)?halve\s+prijs", text):
+                  return "second_half_price", extras, money(regular * 0.75)
+          
+              m = re.search(r"(?:2e|2de|tweede)\s+(?:product\s+)?voor\s+[€]?\s*([0-9]+(?:[.,][0-9]{1,2})?)", text)
+              if m:
+                  second = float(m.group(1).replace(",", "."))
+                  if second >= 0:
+                      return "second_for_price", extras, money((regular + second) / 2.0)
+          
+              return "generic_bonus", extras, None
+          
+          
+          def image_urls(images: Any) -> list[str]:
+              out: list[tuple[int, str]] = []
+              if isinstance(images, list):
+                  for item in images:
+                      if not isinstance(item, dict):
+                          continue
+                      url = item.get("url")
+                      if not isinstance(url, str) or not url.startswith("http"):
+                          continue
+                      width = first_int(item, ("width",)) or 0
+                      out.append((width, url))
+              # Largest first, duplicate-free.
+              seen: set[str] = set()
+              result: list[str] = []
+              for _, url in sorted(out, key=lambda x: x[0], reverse=True):
+                  if url not in seen:
+                      seen.add(url)
+                      result.append(url)
+              return result
+          
+          
+          def normalize_date(value: Any) -> str | None:
+              if not isinstance(value, str) or not value.strip():
+                  return None
+              text = value.strip()[:10]
+              return text if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) else None
+          
+          
+          def map_product(p: dict[str, Any]) -> dict[str, Any] | None:
+              source_id = first_int(p, ("webshopId", "id"))
+              title = first_text(p, ("title", "name"))
+              current = to_float(p.get("currentPrice"))
+              before = to_float(p.get("priceBeforeBonus"))
+              is_bonus = bool(p.get("isBonus"))
+          
+              if not title or current is None or current <= 0:
+                  return None
+              regular = before if is_bonus and before is not None and before > 0 else current
+              if regular is None or regular <= 0:
+                  return None
+              regular = money(regular)
+              current = money(current)
+          
+              label = first_text(p, ("bonusMechanism", "discountDescription", "discountText"))
+              offer_type = "generic_bonus"
+              offer_extras: dict[str, Any] = {}
+              effective = current if current < regular else None
+              if is_bonus and label:
+                  offer_type, offer_extras, derived = parse_bundle_label(label, regular)
+                  if effective is None and derived is not None and 0 < derived < regular:
+                      effective = derived
+                  elif effective is not None and offer_type == "generic_bonus":
+                      offer_type = "fixed_price"
+              elif is_bonus and effective is not None:
+                  offer_type = "fixed_price"
+          
+              offer: dict[str, Any] = {
+                  "active": is_bonus,
+                  "type": offer_type if is_bonus else None,
+                  "label": label or ("Bonus" if is_bonus else None),
+                  "start_date": normalize_date(p.get("bonusStartDate")),
+                  "end_date": normalize_date(p.get("bonusEndDate")),
+              }
+              offer.update(offer_extras)
+          
+              urls = image_urls(p.get("images"))
+              result: dict[str, Any] = {
+                  "source_id": str(source_id) if source_id is not None else None,
+                  "ean": None,
+                  "name": title,
+                  "brand": first_text(p, ("brand",)),
+                  "category": first_text(p, ("mainCategory", "category")) or "Overig",
+                  "sub_category": first_text(p, ("subCategory",)),
+                  "unit_size": first_text(p, ("salesUnitSize", "unitSize")) or "1 st",
+                  "regular_price": regular,
+                  # For promotions like 1+1 the catalog price often remains the normal piece price.
+                  # Storing the derived effective price lets the app compare the deal correctly.
+                  "current_price": money(effective) if is_bonus and effective is not None else current,
+                  "offer": offer,
+                  "ah": {
+                      "webshop_id": source_id,
+                      "hq_id": first_int(p, ("hqId",)),
+                      "unit_price_description": first_text(p, ("unitPriceDescription",)),
+                      "nutriscore": first_text(p, ("nutriscore", "nutriScore")),
+                      "available_online": p.get("availableOnline") if isinstance(p.get("availableOnline"), bool) else None,
+                      "orderable": p.get("isOrderable") if isinstance(p.get("isOrderable"), bool) else None,
+                      "order_availability_status": first_text(p, ("orderAvailabilityStatus",)),
+                      "property_icons": p.get("propertyIcons") if isinstance(p.get("propertyIcons"), list) else [],
+                      "image_urls": urls,
+                      "product_url": f"https://www.ah.nl/producten/product/wi{source_id}" if source_id is not None else None,
+                      "discount_type": first_text(p, ("discountType",)),
+                      "segment_type": first_text(p, ("segmentType",)),
+                      "promotion_type": first_text(p, ("promotionType",)),
+                  },
+              }
+              return result
+          
+          
+          def page_info(payload: dict[str, Any]) -> tuple[int, int, int]:
+              page = payload.get("page")
+              if not isinstance(page, dict):
+                  return 0, 1, 0
+              number = first_int(page, ("number",)) or 0
+              total_pages = first_int(page, ("totalPages",)) or 1
+              total_elements = first_int(page, ("totalElements",)) or 0
+              return number, max(total_pages, 1), total_elements
+          
+          
+          def fetch_taxonomy(client: AhClient, cat: Category, product_sink: dict[int, dict[str, Any]]) -> tuple[bool, int]:
+              """Fetch one taxonomy. Returns (complete, API totalElements)."""
+              page = 0
+              total_pages = 1
+              total_elements = 0
+              seen_pages: set[int] = set()
+              while page < total_pages and page < 500:
+                  try:
+                      payload = client.get(
+                          "/mobile-services/product/search/v2",
+                          {
+                              "sortOn": "RELEVANCE",
+                              "size": PAGE_SIZE,
+                              "page": page,
+                              "taxonomyId": cat.id,
+                              "adType": "TAXONOMY",
+                          },
+                          allow_400=True,
+                      )
+                  except ApiError as exc:
+                      if exc.status == 400 and page > 0:
+                          print(f"  Categorie {cat.id} ({cat.name}) kapt af op pagina {page}; subcategorie-fallback wordt gebruikt.", flush=True)
+                          return False, total_elements
+                      raise
+          
+                  if not isinstance(payload, dict):
+                      return False, total_elements
+                  page_number, total_pages, total_elements = page_info(payload)
+                  if page_number in seen_pages:
+                      return False, total_elements
+                  seen_pages.add(page_number)
+          
+                  products = payload.get("products")
+                  if not isinstance(products, list):
+                      products = []
+                  for p in products:
+                      if not isinstance(p, dict):
+                          continue
+                      pid = first_int(p, ("webshopId", "id"))
+                      if pid is not None and pid > 0:
+                          # Prefer a later occurrence if it contains more non-empty fields.
+                          old = product_sink.get(pid)
+                          if old is None or sum(v not in (None, "", [], {}) for v in p.values()) >= sum(v not in (None, "", [], {}) for v in old.values()):
+                              product_sink[pid] = p
+          
+                  if page + 1 >= total_pages:
+                      return True, total_elements
+                  page += 1
+              return page >= total_pages, total_elements
+          
+          
+          def get_children(client: AhClient, cat: Category) -> list[Category]:
+              try:
+                  payload = client.get(f"/mobile-services/v1/product-shelves/categories/{cat.id}/sub-categories", allow_400=True)
+              except ApiError as exc:
+                  if exc.status == 400:
+                      return []
+                  raise
+              return direct_category_nodes(payload)
+          
+          
+          def gather_catalog(client: AhClient) -> tuple[dict[int, dict[str, Any]], list[Category], list[str]]:
+              root_payload = client.get("/mobile-services/v1/product-shelves/categories")
+              roots = direct_category_nodes(root_payload)
+              if not roots:
+                  raise ApiError("Geen Albert Heijn-hoofdcategorieën gevonden; API-formaat lijkt gewijzigd")
+              print(f"{len(roots)} hoofdcategorieën gevonden.", flush=True)
+          
+              products: dict[int, dict[str, Any]] = {}
+              warnings: list[str] = []
+              visited_taxonomies: set[int] = set()
+          
+              def crawl(cat: Category, depth: int = 0) -> None:
+                  if cat.id in visited_taxonomies:
+                      return
+                  visited_taxonomies.add(cat.id)
+                  indent = "  " * depth
+                  print(f"{indent}→ {cat.name} ({cat.id})", flush=True)
+                  fetch_error = None
+                  try:
+                      complete, total = fetch_taxonomy(client, cat, products)
+                  except ApiError as exc:
+                      complete, total = False, 0
+                      fetch_error = str(exc)
+                      print(f"{indent}  Direct ophalen mislukt ({exc}); subcategorie-fallback wordt geprobeerd.", flush=True)
+                  print(f"{indent}  API-totaal: {total}; uniek totaal nu: {len(products)}", flush=True)
+                  if complete:
+                      return
+                  try:
+                      children = get_children(client, cat)
+                  except ApiError as exc:
+                      warnings.append(f"Subcategorieën {cat.id} ({cat.name}) konden niet worden opgehaald: {exc}")
+                      children = []
+                  if not children:
+                      detail = f"; oorspronkelijke fout: {fetch_error}" if fetch_error else ""
+                      warnings.append(f"Categorie {cat.id} ({cat.name}) kon niet volledig worden gepagineerd en heeft geen bruikbare subcategorie-fallback{detail}")
+                      return
+                  for child in children:
+                      crawl(child, depth + 1)
+          
+              for root in roots:
+                  crawl(root)
+          
+              return products, roots, warnings
+          
+          
+          def build_output(raw_products: dict[int, dict[str, Any]], roots: list[Category], warnings: list[str], client: AhClient) -> dict[str, Any]:
+              products: list[dict[str, Any]] = []
+              skipped = 0
+              for pid in sorted(raw_products):
+                  mapped = map_product(raw_products[pid])
+                  if mapped is None:
+                      skipped += 1
+                      continue
+                  products.append(mapped)
+          
+              now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+              active_offers = sum(1 for p in products if p.get("offer", {}).get("active"))
+              return {
+                  "schema_version": 1,
+                  "database_type": "supermarket_catalog",
+                  "supermarket": {
+                      "id": "albert_heijn_nl",
+                      "name": "Albert Heijn",
+                      "country": "NL",
+                      "currency": "EUR",
+                  },
+                  "generated_at": now,
+                  "data_scope": "current AH online product catalog reachable through anonymous Appie taxonomy search",
+                  "import_policy": {
+                      "match_priority": ["source_id", "ean", "normalized_name"],
+                      "on_existing_product": "update",
+                      # Keep is intentionally safer than remove: an undocumented API can temporarily omit a category.
+                      "on_missing_product": "keep",
+                      "remove_expired_offers": True,
+                      "preserve_user_fields": True,
+                  },
+                  "catalog_stats": {
+                      "products": len(products),
+                      "active_offers": active_offers,
+                      "raw_unique_products": len(raw_products),
+                      "skipped_without_valid_price_or_name": skipped,
+                      "root_categories": len(roots),
+                      "http_requests": client.requests,
+                      "http_retries": client.retries,
+                      "warnings": len(warnings),
+                  },
+                  "products": products,
+                  "sources": [
+                      {
+                          "name": "Albert Heijn Appie mobile API (anonymous)",
+                          "base_url": BASE,
+                          "retrieved_at": now,
+                      }
+                  ],
+                  "warnings": warnings,
+                  "notes": [
+                      "source_id is the Albert Heijn webshopId and is the primary stable import key.",
+                      "EAN/GTIN is left null because the catalog search response does not reliably expose it; no barcode is guessed.",
+                      "Extra AH metadata is stored under product.ah. Boodschappen Duitsland 1.0.3 ignores those extra fields safely.",
+                      "Promotional effective unit prices are derived for common multi-buy mechanisms so offers remain comparable in the app.",
+                  ],
+              }
+          
+          
+          def write_files(data: dict[str, Any]) -> None:
+              with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+                  json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+              with open(OUTPUT_FILE, "rb") as f:
+                  digest = hashlib.sha256(f.read()).hexdigest()
+              with open(OUTPUT_FILE + ".sha256", "w", encoding="ascii") as f:
+                  f.write(f"{digest}  {os.path.basename(OUTPUT_FILE)}\n")
+          
+              stats = data["catalog_stats"]
+              lines = [
+                  "Albert Heijn volledige database - generatierapport",
+                  f"Gegenereerd: {data['generated_at']}",
+                  f"Producten: {stats['products']}",
+                  f"Actieve aanbiedingen: {stats['active_offers']}",
+                  f"Ruwe unieke AH-producten: {stats['raw_unique_products']}",
+                  f"Overgeslagen zonder geldige naam/prijs: {stats['skipped_without_valid_price_or_name']}",
+                  f"Hoofdcategorieën: {stats['root_categories']}",
+                  f"HTTP-aanvragen: {stats['http_requests']}",
+                  f"Retries: {stats['http_retries']}",
+                  f"Waarschuwingen: {stats['warnings']}",
+                  f"SHA-256: {digest}",
+                  "",
+              ]
+              if data.get("warnings"):
+                  lines.append("Waarschuwingen:")
+                  lines.extend(f"- {w}" for w in data["warnings"])
+              else:
+                  lines.append("Geen onvolledige categorieën gedetecteerd.")
+              with open(REPORT_FILE, "w", encoding="utf-8") as f:
+                  f.write("\n".join(lines) + "\n")
+          
+          
+          def main() -> int:
+              print("Albert Heijn databasegenerator gestart", flush=True)
+              client = AhClient()
+              raw, roots, warnings = gather_catalog(client)
+              if len(raw) < 15000:
+                  raise ApiError(f"Veiligheidsstop: slechts {len(raw)} unieke producten gevonden; verwacht minimaal 15.000 voor een volledige AH-onlinecatalogus")
+              if warnings:
+                  raise ApiError(f"Veiligheidsstop: {len(warnings)} categorieproblemen bleven onopgelost; er wordt bewust geen onvolledig bestand als volledig gepubliceerd")
+              data = build_output(raw, roots, warnings, client)
+              write_files(data)
+              stats = data["catalog_stats"]
+              print("", flush=True)
+              print(f"KLAAR: {stats['products']} producten, {stats['active_offers']} aanbiedingen.", flush=True)
+              print(f"Bestand: {OUTPUT_FILE}", flush=True)
+              if warnings:
+                  print(f"LET OP: {len(warnings)} waarschuwingen; zie {REPORT_FILE}", flush=True)
+              return 0
+          
+          
+          if __name__ == "__main__":
+              try:
+                  raise SystemExit(main())
+              except KeyboardInterrupt:
+                  print("Afgebroken.", file=sys.stderr)
+                  raise SystemExit(130)
+              except Exception as exc:
+                  print(f"FOUT: {exc}", file=sys.stderr)
+                  raise
+          PY
+          python /tmp/build_ah_database.py
+
+      - name: Database bewaren
+        uses: actions/upload-artifact@v4
+        with:
+          name: Albert-Heijn-volledige-database
+          path: |
+            Albert_Heijn_volledig.json
+            Albert_Heijn_volledig.json.sha256
+            Albert_Heijn_database_rapport.txt
+          if-no-files-found: error
+          retention-days: 30
