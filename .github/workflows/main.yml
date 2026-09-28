@@ -3,7 +3,7 @@ name: Bouw Boodschappen Duitsland APK
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "codex/ui-1-0-4-review" ]
 
 jobs:
   build:
