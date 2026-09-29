@@ -1,10 +1,10 @@
-# Boodschappen Benelux
+# Boodschappen BeNeLux-Duitsland
 
 Nieuwe Android-boodschappenapp, vanaf nul ontworpen. De bestaande repository blijft behouden; de oude Boodschappen Duitsland-broncode is geen functionele basis voor de nieuwe app.
 
 ## Afgesproken uitgangspunten
 
-- Zichtbare appnaam: **Boodschappen Benelux**.
+- Zichtbare appnaam: **Boodschappen BeNeLux-Duitsland**.
 - Een centrale productcatalogus herkent producten op barcode en toont productgegevens.
 - Een boodschappenlijst gebruikt dezelfde producten als de scanner en prijsvergelijking.
 - Een bonscanner leest winkel, datum, productregels en betaalde bedragen. De gebruiker kan herkende producten en bedragen controleren en corrigeren voordat deze aan de prijsgeschiedenis worden gekoppeld.
