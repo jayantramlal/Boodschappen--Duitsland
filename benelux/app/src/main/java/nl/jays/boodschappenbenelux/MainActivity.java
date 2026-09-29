@@ -86,11 +86,41 @@ public class MainActivity extends Activity {
     }
     private void product(String code){currentBarcode=code;String name=db.productName(code);if(name==null){layout("Nieuw product");note("Barcode "+code+" is nog onbekend. Vul de gegevens zelf in.");EditText n=input("Productnaam","");EditText size=input("Inhoud, bijvoorbeeld 500 ml","");button("Product bewaren",()->{String title=n.getText().toString().trim();if(title.isEmpty()){toast("Naam is verplicht");return;}db.product(code,title,size.getText().toString().trim());product(code);});return;}
         layout(name);note("Barcode: "+code);button("Toevoegen aan boodschappenlijst",()->{db.addShopping(code);toast("Toegevoegd aan lijst");});button("Prijs vastleggen",()->priceForm(code,null,null));line("Prijsgegevens per winkel",null);
-        Set<String> shown=new HashSet<>();long now=System.currentTimeMillis();
-        try(Cursor c=db.prices(code)){while(c.moveToNext()){String shop=c.getString(0);if(!shown.add(shop))continue;int cents=c.getInt(1);String source=c.getString(2);long observed=c.getLong(3);Long until=c.isNull(4)?null:c.getLong(4);Integer original=c.isNull(5)?null:c.getInt(5);
+        Map<String,PriceRow> best=new HashMap<>();long now=System.currentTimeMillis();
+        try(Cursor c=db.prices(code)){while(c.moveToNext()){
+            String shop=c.getString(0);int cents=c.getInt(1);String source=c.getString(2);long observed=c.getLong(3);
+            Long until=c.isNull(4)?null:c.getLong(4);Integer original=c.isNull(5)?null:c.getInt(5);
             boolean active=source.equals("ACTIE")&&until!=null&&until>=now;
-            String label=shop+"  "+(active&&original!=null?euro(original)+" → ":"")+euro(cents)+"  "+(active?"ACTIE":source.equals("BON")?"bonprijs van "+date(observed):source.equals("ACTIE")?"actie verlopen":"handmatig van "+date(observed));line(label,null);
-        }}if(shown.isEmpty())note("Nog geen winkelprijzen voor dit product.");
+            boolean recent=source.equals("HANDMATIG")&&observed>=now-86400000L;
+            int rank=active?0:recent?1:source.equals("BON")?2:3;
+            PriceRow row=new PriceRow(shop,cents,source,observed,original,active,rank);
+            PriceRow previous=best.get(shop);
+            if(previous==null||rank<previous.rank||(rank==previous.rank&&observed>previous.observed))best.put(shop,row);
+        }}
+        List<PriceRow> rows=new ArrayList<>();
+        for(String shop:shops)rows.add(best.containsKey(shop)?best.get(shop):new PriceRow(shop,0,"",0,null,false,4));
+        rows.sort((a,b)->{int c=Integer.compare(a.rank>=2?1:0,b.rank>=2?1:0);if(c!=0)return c;c=Integer.compare(a.cents,b.cents);return c!=0?c:a.shop.compareTo(b.shop);});
+        for(PriceRow row:rows)priceRow(row);
+    }
+    private static class PriceRow {
+        final String shop,source;final int cents,rank;final long observed;final Integer original;final boolean active;
+        PriceRow(String shop,int cents,String source,long observed,Integer original,boolean active,int rank){
+            this.shop=shop;this.cents=cents;this.source=source;this.observed=observed;this.original=original;this.active=active;this.rank=rank;
+        }
+    }
+    private void priceRow(PriceRow row){
+        String label;
+        if(row.rank>=3)label=row.shop+" — prijs onbekend";
+        else if(row.active)label=row.shop+"  "+(row.original!=null?euro(row.original)+"  ":"")+euro(row.cents)+"  ACTIE";
+        else label=row.shop+"  "+euro(row.cents)+"  "+(row.source.equals("BON")?"bon van ":"waargenomen ")+date(row.observed)+(row.rank==2?" (historisch)":"");
+        TextView t=text(label,16,white);GradientDrawable bg=new GradientDrawable();bg.setColor(card);bg.setCornerRadius(dp(14));t.setBackground(bg);
+        if(row.active&&row.original!=null){
+            android.text.SpannableString span=new android.text.SpannableString(label);
+            int from=label.indexOf(euro(row.original));
+            span.setSpan(new android.text.style.StrikethroughSpan(),from,from+euro(row.original).length(),0);
+            t.setText(span);
+        }
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(9);body.addView(t,p);
     }
     private String euro(int cents){return String.format(Locale.GERMANY,"€ %.2f",cents/100.0);}
     private String date(long ms){return new SimpleDateFormat("dd-MM-yyyy",Locale.getDefault()).format(new Date(ms));}
