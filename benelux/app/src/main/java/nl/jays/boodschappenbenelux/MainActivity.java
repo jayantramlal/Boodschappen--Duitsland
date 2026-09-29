@@ -24,7 +24,8 @@ public class MainActivity extends Activity {
     private Store db;
     private LinearLayout root,body;
     private int navy=Color.rgb(13,24,42),card=Color.rgb(25,39,61),yellow=Color.rgb(255,199,51),white=Color.WHITE;
-    private final int CAMERA_REQUEST=42;
+    private final int CAMERA_REQUEST=42, GALLERY_REQUEST=43;
+    private final Set<Integer> savedReceiptLines=new HashSet<>();
     private String currentBarcode;
     @Override public void onCreate(Bundle b){super.onCreate(b);db=new Store(this);getWindow().setStatusBarColor(navy);getWindow().setNavigationBarColor(Color.BLACK);home();}
     private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density);}
@@ -102,12 +103,65 @@ public class MainActivity extends Activity {
         button("Bewaar als handmatig geobserveerde prijs",()->{String s=shop.getText().toString().trim();Integer c=parseCents(amount.getText().toString());if(s.isEmpty()||c==null){toast("Controleer winkel en prijs");return;}db.recordPrice(code,s,c,"HANDMATIG",null,null);product(code);});
         button("Actie vastleggen",()->{String s=shop.getText().toString().trim();Integer c=parseCents(amount.getText().toString());if(s.isEmpty()||c==null){toast("Controleer winkel en actieprijs");return;}actionForm(code,s,c);});}
     private void actionForm(String code,String shop,int cents){layout("Actie controleren");note(shop+" — "+euro(cents));EditText original=input("Normale prijs (€), optioneel","");EditText days=input("Nog geldig (aantal dagen)","7");button("Actie bewaren",()->{try{int d=Integer.parseInt(days.getText().toString().trim());Integer regular=original.getText().toString().trim().isEmpty()?null:parseCents(original.getText().toString());if(d<1||d>365||(!original.getText().toString().trim().isEmpty()&&regular==null)){toast("Controleer prijs en geldigheid");return;}db.recordPrice(code,shop,cents,"ACTIE",System.currentTimeMillis()+86400000L*d,regular);product(code);}catch(Exception e){toast("Vul een geldig aantal dagen in");}});}
-    private void receipt(){layout("Bon scannen");note("Maak een foto en controleer de herkende tekst. Bonregels hebben meestal geen barcode; koppel elke prijs zelf aan het juiste product.");button("Foto van bon maken",()->{try{Intent i=new Intent("android.media.action.IMAGE_CAPTURE");startActivityForResult(i,CAMERA_REQUEST);}catch(Exception e){toast("Geen camera-app beschikbaar");}});button("Bonprijs handmatig toevoegen",this::manualReceipt);}
+    private void receipt(){layout("Bon scannen");note("Maak een foto en controleer de herkende tekst. Bonregels hebben meestal geen barcode; koppel elke prijs zelf aan het juiste product.");button("Foto van bon maken",()->{try{Intent i=new Intent("android.media.action.IMAGE_CAPTURE");startActivityForResult(i,CAMERA_REQUEST);}catch(Exception e){toast("Geen camera-app beschikbaar");}});button("Volledige bonfoto kiezen",()->{Intent i=new Intent(Intent.ACTION_GET_CONTENT);i.setType("image/*");startActivityForResult(i,GALLERY_REQUEST);});button("Bonprijs handmatig toevoegen",this::manualReceipt);}
     private void manualReceipt(){layout("Bonprijs toevoegen");EditText barcode=input("Barcode van gekocht product","");EditText shop=input("Winkel","");EditText name=input("Productnaam als nieuw product","");EditText amount=input("Prijs (€)","");button("Controleer en bewaar",()->{String b=barcode.getText().toString().trim(),s=shop.getText().toString().trim();Integer cents=parseCents(amount.getText().toString());if(b.isEmpty()||s.isEmpty()||cents==null){toast("Barcode, winkel en prijs zijn verplicht");return;}if(db.productName(b)==null){String n=name.getText().toString().trim();if(n.isEmpty()){toast("Vul ook de productnaam in");return;}db.product(b,n,"");}db.recordPrice(b,s,cents,"BON",null,null);product(b);});}
-    @Override protected void onActivityResult(int req,int result,Intent data){super.onActivityResult(req,result,data);if(req!=CAMERA_REQUEST||result!=RESULT_OK||data==null){if(req==CAMERA_REQUEST)toast("Geen bonfoto ontvangen");return;}
-        Object obj=data.getExtras()==null?null:data.getExtras().get("data");if(!(obj instanceof Bitmap)){toast("Camera leverde geen foto. Voeg de prijs handmatig toe.");return;}
-        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS).process(InputImage.fromBitmap((Bitmap)obj,0))
-            .addOnSuccessListener(txt->receiptReview(txt.getText())).addOnFailureListener(e->toast("Bonherkenning mislukt. Voeg de prijs handmatig toe."));}
-    private void receiptReview(String raw){layout("Bon controleren");note("Herkende tekst (controleer de bedragen):");TextView content=text(raw.isEmpty()?"Geen tekst gevonden":raw,14,white);body.addView(content);button("Product en prijs koppelen",this::manualReceipt);}
+    @Override protected void onActivityResult(int req,int result,Intent data){
+        super.onActivityResult(req,result,data);
+        if((req!=CAMERA_REQUEST&&req!=GALLERY_REQUEST)||result!=RESULT_OK||data==null)return;
+        try {
+            InputImage image;
+            if(req==GALLERY_REQUEST&&data.getData()!=null)image=InputImage.fromFilePath(this,data.getData());
+            else {
+                Object obj=data.getExtras()==null?null:data.getExtras().get("data");
+                if(!(obj instanceof Bitmap)){toast("Camera leverde geen bruikbare foto. Kies een volledige bonfoto.");return;}
+                image=InputImage.fromBitmap((Bitmap)obj,0);
+            }
+            layout("Bon lezen");note("Tekstherkenning bezig…");
+            TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS).process(image)
+                .addOnSuccessListener(txt->{savedReceiptLines.clear();receiptReview(txt.getText());})
+                .addOnFailureListener(e->toast("Bonherkenning mislukt. Voeg de prijs handmatig toe."));
+        }catch(Exception e){toast("Bonfoto kon niet worden geopend.");}
+    }
+    private void receiptReview(String raw){
+        layout("Bon controleren");
+        String suggestedShop=ReceiptParser.shop(raw);
+        note("Controleer elke regel en koppel die aan een barcode. De bonprijs wordt pas opgeslagen na jouw bevestiging.");
+        java.util.List<ReceiptParser.Line> lines=ReceiptParser.parse(raw);
+        if(lines.isEmpty())note("Geen afzonderlijke productregels gevonden. Je kunt de tekst hieronder gebruiken voor handmatige invoer.");
+        for(int i=0;i<lines.size();i++){
+            if(savedReceiptLines.contains(i))continue;
+            final int index=i;ReceiptParser.Line line=lines.get(i);
+            line(line.label+"  "+euro(line.cents),()->receiptLine(raw,index,suggestedShop));
+        }
+        button("Bonprijs handmatig toevoegen",this::manualReceipt);
+        note("Herkende bontekst:");body.addView(text(raw.isEmpty()?"Geen tekst herkend":raw,13,white));
+    }
+    private void receiptLine(String raw,int index,String suggestedShop){
+        java.util.List<ReceiptParser.Line> lines=ReceiptParser.parse(raw);
+        if(index<0||index>=lines.size())return;
+        ReceiptParser.Line item=lines.get(index);
+        layout("Bonregel koppelen");
+        EditText name=input("Productnaam",item.label);
+        EditText barcode=input("Barcode van exact dit product","");
+        EditText shop=input("Winkel",suggestedShop);
+        EditText amount=input("Betaalde prijs (€)",String.format(Locale.GERMANY,"%.2f",item.cents/100.0));
+        note("Selecteer een bekend product hieronder of voer de barcode in. Controleer ook verpakking en prijs.");
+        String term=item.label.split(" ")[0];
+        if(term.length()>=3)try(Cursor c=db.findProducts(term)){
+            while(c.moveToNext()){String foundCode=c.getString(0),foundName=c.getString(1);
+                line(foundName+" · "+foundCode,()->{barcode.setText(foundCode);name.setText(foundName);});
+            }
+        }
+        button("Gekoppelde bonprijs bewaren",()->{
+            String b=barcode.getText().toString().trim(),n=name.getText().toString().trim(),sh=shop.getText().toString().trim();
+            Integer cents=parseCents(amount.getText().toString());
+            if(b.isEmpty()||n.isEmpty()||sh.isEmpty()||cents==null){toast("Controleer barcode, product, winkel en prijs");return;}
+            String old=db.productName(b);
+            if(old==null)db.product(b,n,"");
+            else if(!old.equals(n)){toast("Barcode hoort bij "+old+". Kies het juiste product.");return;}
+            db.recordPrice(b,sh,cents,"BON",null,null);savedReceiptLines.add(index);receiptReview(raw);
+        });
+        button("Deze regel overslaan",()->{savedReceiptLines.add(index);receiptReview(raw);});
+    }
     @Override public void onBackPressed(){home();}
 }

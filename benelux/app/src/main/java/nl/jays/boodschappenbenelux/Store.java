@@ -42,6 +42,7 @@ final class Store extends SQLiteOpenHelper {
         if(original!=null)v.put("original_cents",original);
         getWritableDatabase().insertOrThrow("prices",null,v);
     }
+    Cursor findProducts(String query) { return getReadableDatabase().rawQuery("SELECT barcode,name FROM products WHERE name LIKE ? ORDER BY name LIMIT 20",new String[]{"%"+query.replace("%","").replace("_","")+"%"}); }
     Cursor list() { return getReadableDatabase().rawQuery("SELECT shopping.barcode,products.name,shopping.quantity FROM shopping JOIN products USING(barcode) ORDER BY products.name",null); }
     Cursor prices(String barcode) { return getReadableDatabase().rawQuery("SELECT store,cents,source,observed,valid_until,original_cents FROM prices WHERE barcode=? ORDER BY store,observed DESC",new String[]{barcode}); }
     Cursor shops() { return getReadableDatabase().rawQuery("SELECT DISTINCT store FROM prices ORDER BY store",null); }
