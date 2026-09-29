@@ -23,7 +23,14 @@ final class Store extends SQLiteOpenHelper {
         }
     }
     void addShopping(String barcode) {
-        getWritableDatabase().execSQL("INSERT INTO shopping(barcode,quantity) VALUES(?,1) ON CONFLICT(barcode) DO UPDATE SET quantity=quantity+1",new Object[]{barcode});
+        SQLiteDatabase d=getWritableDatabase();
+        d.beginTransaction();
+        try { ContentValues increment=new ContentValues();
+            try(Cursor c=d.rawQuery("SELECT quantity FROM shopping WHERE barcode=?",new String[]{barcode})) {
+                if(c.moveToFirst()) { increment.put("quantity",c.getInt(0)+1);d.update("shopping",increment,"barcode=?",new String[]{barcode}); }
+                else { increment.put("barcode",barcode);increment.put("quantity",1);d.insertOrThrow("shopping",null,increment); }
+            } d.setTransactionSuccessful();
+        } finally { d.endTransaction(); }
     }
     void removeShopping(String barcode) {
         getWritableDatabase().delete("shopping","barcode=?",new String[]{barcode});
