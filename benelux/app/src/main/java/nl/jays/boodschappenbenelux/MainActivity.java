@@ -15,6 +15,9 @@ import com.google.mlkit.vision.text.*;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 import java.text.*;
 import java.util.*;
+import java.net.*;
+import java.io.*;
+import org.json.*;
 
 public class MainActivity extends Activity {
     private final String[] shops={"Albert Heijn","Jumbo","Dirk","Lidl Nederland","PLUS","Kruidvat","REWE","EDEKA Schroff","Lidl Duitsland","ALDI SÜD","Kaufland","dm"};
@@ -43,11 +46,43 @@ public class MainActivity extends Activity {
     private void note(String s){body.addView(text(s,14,white));}
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
     private EditText input(String hint,String value){EditText e=new EditText(this);e.setSingleLine(true);e.setHint(hint);e.setText(value);e.setTextColor(white);e.setHintTextColor(Color.LTGRAY);body.addView(e);return e;}
-    private void home(){layout("Boodschappen BeNeLux-Duitsland");note("Scan producten, stel je lijst samen en bewaar prijzen van bonnetjes.");button("Scan een barcode",this::scan);button("Barcode handmatig invoeren",this::manualBarcode);button("Boodschappenlijst",this::list);button("Bon vastleggen",this::receipt);button("Vergelijk winkels",this::compare);note("Bonprijzen zijn eerdere aankopen. Onbekende of verlopen prijzen worden niet als actuele prijzen getoond.");}
+    private void home(){layout("Boodschappen BeNeLux-Duitsland");note("Scan producten, stel je lijst samen en bewaar prijzen van bonnetjes. Productgegevens: Open Food Facts en verwante Open Facts-projecten (ODbL).");button("Scan een barcode",this::scan);button("Barcode handmatig invoeren",this::manualBarcode);button("Boodschappenlijst",this::list);button("Bon vastleggen",this::receipt);button("Vergelijk winkels",this::compare);note("Bonprijzen zijn eerdere aankopen. Onbekende of verlopen prijzen worden niet als actuele prijzen getoond.");}
     private void scan(){GmsBarcodeScanner scanner=GmsBarcodeScanning.getClient(this,new GmsBarcodeScannerOptions.Builder().enableAutoZoom().build());scanner.startScan()
-        .addOnSuccessListener(result->{String code=result.getRawValue();if(code!=null&&!code.trim().isEmpty())product(code.trim());else toast("Geen barcode gevonden");})
+        .addOnSuccessListener(result->{String code=result.getRawValue();if(code!=null&&!code.trim().isEmpty())lookupProduct(code.trim());else toast("Geen barcode gevonden");})
         .addOnFailureListener(e->{toast("Scanner niet beschikbaar. Voer de barcode handmatig in.");manualBarcode();});}
-    private void manualBarcode(){layout("Barcode invoeren");EditText e=input("EAN / barcode","");button("Product openen",()->{if(e.getText().toString().trim().isEmpty())toast("Vul een barcode in");else product(e.getText().toString().trim());});}
+    private void manualBarcode(){layout("Barcode invoeren");EditText e=input("EAN / barcode","");button("Product openen",()->{if(e.getText().toString().trim().isEmpty())toast("Vul een barcode in");else lookupProduct(e.getText().toString().trim());});}
+    private void lookupProduct(String code){
+        if(db.productName(code)!=null){product(code);return;}
+        layout("Product zoeken");note("Zoeken naar barcode "+code+" in openbare productgegevens…");
+        new Thread(()->{
+            String[] domains={"world.openfoodfacts.org","world.openbeautyfacts.org","world.openpetfoodfacts.org","world.openproductsfacts.org"};
+            String title=null,size="";boolean error=false;
+            for(String domain:domains){
+                HttpURLConnection connection=null;
+                try{
+                    URL url=new URL("https://"+domain+"/api/v2/product/"+java.net.URLEncoder.encode(code,"UTF-8")+".json?fields=product_name,product_name_nl,quantity");
+                    connection=(HttpURLConnection)url.openConnection();
+                    connection.setConnectTimeout(4500);connection.setReadTimeout(4500);
+                    connection.setRequestProperty("User-Agent","BoodschappenBeNeLuxDuitsland/1.0.0 (https://github.com/jayantramlal/Boodschappen--Duitsland)");
+                    if(connection.getResponseCode()!=200){error=true;continue;}
+                    try(InputStream stream=connection.getInputStream();ByteArrayOutputStream bytes=new ByteArrayOutputStream()){
+                        byte[] buffer=new byte[4096];int count;while((count=stream.read(buffer))!=-1&&bytes.size()<100000){bytes.write(buffer,0,count);}
+                        JSONObject obj=new JSONObject(bytes.toString("UTF-8"));
+                        if(obj.optInt("status",0)==1){
+                            JSONObject item=obj.optJSONObject("product");
+                            if(item!=null){title=item.optString("product_name_nl","").trim();if(title.isEmpty())title=item.optString("product_name","").trim();size=item.optString("quantity","").trim();}
+                            if(title!=null&&!title.isEmpty())break;
+                        }
+                    }
+                }catch(Exception e){error=true;}finally{if(connection!=null)connection.disconnect();}
+            }
+            final String foundName=title,foundSize=size;final boolean networkError=error;
+            runOnUiThread(()->{if(isFinishing()||isDestroyed())return;
+                if(foundName!=null&&!foundName.isEmpty()){db.product(code,foundName,foundSize);product(code);}
+                else{if(networkError)toast("Product niet gevonden of verbinding ontbreekt. Voer het zelf in.");product(code);}
+            });
+        }).start();
+    }
     private void product(String code){currentBarcode=code;String name=db.productName(code);if(name==null){layout("Nieuw product");note("Barcode "+code+" is nog onbekend. Vul de gegevens zelf in.");EditText n=input("Productnaam","");EditText size=input("Inhoud, bijvoorbeeld 500 ml","");button("Product bewaren",()->{String title=n.getText().toString().trim();if(title.isEmpty()){toast("Naam is verplicht");return;}db.product(code,title,size.getText().toString().trim());product(code);});return;}
         layout(name);note("Barcode: "+code);button("Toevoegen aan boodschappenlijst",()->{db.addShopping(code);toast("Toegevoegd aan lijst");});button("Prijs vastleggen",()->priceForm(code,null,null));line("Prijsgegevens per winkel",null);
         Set<String> shown=new HashSet<>();long now=System.currentTimeMillis();
