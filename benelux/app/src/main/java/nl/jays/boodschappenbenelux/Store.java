@@ -35,9 +35,10 @@ final class Store extends SQLiteOpenHelper {
     void removeShopping(String barcode) {
         getWritableDatabase().delete("shopping","barcode=?",new String[]{barcode});
     }
-    void recordPrice(String barcode,String shop,int cents,String source,Long until,Integer original) {
+    void recordPrice(String barcode,String shop,int cents,String source,Long until,Integer original) { recordPriceAt(barcode,shop,cents,source,until,original,System.currentTimeMillis()); }
+    void recordPriceAt(String barcode,String shop,int cents,String source,Long until,Integer original,long observed) {
         ContentValues v=new ContentValues();
-        v.put("barcode",barcode); v.put("store",shop); v.put("cents",cents); v.put("source",source); v.put("observed",System.currentTimeMillis());
+        v.put("barcode",barcode); v.put("store",shop); v.put("cents",cents); v.put("source",source); v.put("observed",observed);
         if(until!=null)v.put("valid_until",until);
         if(original!=null)v.put("original_cents",original);
         getWritableDatabase().insertOrThrow("prices",null,v);

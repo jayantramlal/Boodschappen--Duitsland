@@ -25,6 +25,15 @@ final class ReceiptParser {
         }
         return out;
     }
+    static String date(String raw){
+        Matcher matcher=Pattern.compile("\\b([0-3]?\\d)[./-]([01]?\\d)[./-](20\\d{2}|\\d{2})\\b").matcher(raw);
+        if(matcher.find()){
+            String year=matcher.group(3);
+            if(year.length()==2)year="20"+year;
+            return String.format(Locale.ROOT,"%02d-%02d-%s",Integer.parseInt(matcher.group(1)),Integer.parseInt(matcher.group(2)),year);
+        }
+        return new java.text.SimpleDateFormat("dd-MM-yyyy",Locale.getDefault()).format(new Date());
+    }
     static String shop(String raw){
         String top=raw.toLowerCase(Locale.ROOT).substring(0,Math.min(180,raw.length()));
         String[][] names={{"albert heijn","Albert Heijn"},{"jumbo","Jumbo"},{"dirk","Dirk"},{"lidl","Lidl"},{"plus","PLUS"},{"kruidvat","Kruidvat"},{"rewe","REWE"},{"schroff","EDEKA Schroff"},{"aldi","ALDI SÜD"},{"kaufland","Kaufland"},{"dm-drogerie","dm"}};

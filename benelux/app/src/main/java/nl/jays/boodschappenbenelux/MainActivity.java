@@ -175,6 +175,7 @@ public class MainActivity extends Activity {
         EditText barcode=input("Barcode van exact dit product","");
         EditText shop=input("Winkel",suggestedShop);
         EditText amount=input("Betaalde prijs (€)",String.format(Locale.GERMANY,"%.2f",item.cents/100.0));
+        EditText purchased=input("Aankoopdatum (dd-mm-jjjj)",ReceiptParser.date(raw));
         note("Selecteer een bekend product hieronder of voer de barcode in. Controleer ook verpakking en prijs.");
         String term=item.label.split(" ")[0];
         if(term.length()>=3)try(Cursor c=db.findProducts(term)){
@@ -189,9 +190,17 @@ public class MainActivity extends Activity {
             String old=db.productName(b);
             if(old==null)db.product(b,n,"");
             else if(!old.equals(n)){toast("Barcode hoort bij "+old+". Kies het juiste product.");return;}
-            db.recordPrice(b,sh,cents,"BON",null,null);savedReceiptLines.add(index);receiptReview(raw);
+            Long bought=parseReceiptDate(purchased.getText().toString());if(bought==null){toast("Controleer de aankoopdatum");return;}db.recordPriceAt(b,sh,cents,"BON",null,null,bought);savedReceiptLines.add(index);receiptReview(raw);
         });
         button("Deze regel overslaan",()->{savedReceiptLines.add(index);receiptReview(raw);});
+    }
+    private Long parseReceiptDate(String value){
+        try{
+            SimpleDateFormat fmt=new SimpleDateFormat("dd-MM-yyyy",Locale.getDefault());
+            fmt.setLenient(false);Date d=fmt.parse(value.trim());
+            if(d==null||d.getTime()>System.currentTimeMillis()+86400000L)return null;
+            return d.getTime();
+        }catch(Exception e){return null;}
     }
     @Override public void onBackPressed(){home();}
 }
