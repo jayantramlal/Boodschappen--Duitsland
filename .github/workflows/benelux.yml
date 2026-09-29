@@ -14,11 +14,22 @@ jobs:
         with: {distribution: temurin, java-version: '17'}
       - uses: gradle/actions/setup-gradle@v4
         with: {gradle-version: '8.9'}
-      - name: Bouw APK
-        run: cd benelux && gradle --no-daemon :app:assembleDebug
+      - name: Release sleutel herstellen
+        shell: bash
+        env:
+          RELEASE_BUNDLE: ${{ secrets.ANDROID_RELEASE_BUNDLE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_BUNDLE"
+          printf '%s' "$RELEASE_BUNDLE" | base64 --decode > /tmp/release-bundle.tar.gz
+          tar -xzf /tmp/release-bundle.tar.gz -C benelux/app
+          test -s benelux/app/release.jks
+          test -s benelux/app/signing.env
+      - name: Bouw release APK
+        run: cd benelux && gradle --no-daemon :app:assembleRelease
       - name: APK bewaren
         uses: actions/upload-artifact@v4
         with:
-          name: Boodschappen-BeNeLux-Duitsland-1.0.0
-          path: benelux/app/build/outputs/apk/debug/app-debug.apk
+          name: Boodschappen-BeNeLux-Duitsland-1.0.1
+          path: benelux/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
