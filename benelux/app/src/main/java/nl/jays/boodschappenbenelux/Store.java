@@ -6,16 +6,26 @@ import android.database.sqlite.*;
 import java.util.*;
 
 final class Store extends SQLiteOpenHelper {
-    Store(Context c) { super(c, "benelux.db", null, 1); }
+    Store(Context c) { super(c, "benelux.db", null, 2); }
     @Override public void onCreate(SQLiteDatabase d) {
-        d.execSQL("CREATE TABLE products(barcode TEXT PRIMARY KEY,name TEXT NOT NULL,size TEXT DEFAULT '')");
+        d.execSQL("CREATE TABLE products(barcode TEXT PRIMARY KEY,name TEXT NOT NULL,size TEXT DEFAULT '',image_url TEXT DEFAULT '')");
         d.execSQL("CREATE TABLE shopping(barcode TEXT PRIMARY KEY,quantity INTEGER NOT NULL DEFAULT 1,FOREIGN KEY(barcode) REFERENCES products(barcode))");
         d.execSQL("CREATE TABLE prices(id INTEGER PRIMARY KEY AUTOINCREMENT,barcode TEXT NOT NULL,store TEXT NOT NULL,cents INTEGER NOT NULL CHECK(cents>=0),observed INTEGER NOT NULL,source TEXT NOT NULL CHECK(source IN ('BON','HANDMATIG','ACTIE')),valid_until INTEGER,original_cents INTEGER,FOREIGN KEY(barcode) REFERENCES products(barcode))");
     }
-    @Override public void onUpgrade(SQLiteDatabase d,int old,int next) { throw new IllegalStateException("Migratie vereist"); }
+    @Override public void onUpgrade(SQLiteDatabase d,int old,int next) {
+        if(old<2)d.execSQL("ALTER TABLE products ADD COLUMN image_url TEXT DEFAULT ''");
+    }
     void product(String barcode,String name,String size) {
-        ContentValues v=new ContentValues(); v.put("barcode",barcode); v.put("name",name); v.put("size",size);
+        product(barcode,name,size,"");
+    }
+    void product(String barcode,String name,String size,String imageUrl) {
+        ContentValues v=new ContentValues(); v.put("barcode",barcode); v.put("name",name); v.put("size",size);v.put("image_url",imageUrl);
         getWritableDatabase().insertWithOnConflict("products",null,v,SQLiteDatabase.CONFLICT_REPLACE);
+    }
+    String productImage(String barcode) {
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT image_url FROM products WHERE barcode=?",new String[]{barcode})){
+            return c.moveToFirst()?c.getString(0):"";
+        }
     }
     String productName(String barcode) {
         try(Cursor c=getReadableDatabase().rawQuery("SELECT name FROM products WHERE barcode=?",new String[]{barcode})) {

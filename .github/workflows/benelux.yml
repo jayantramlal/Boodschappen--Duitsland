@@ -30,6 +30,6 @@ jobs:
       - name: APK bewaren
         uses: actions/upload-artifact@v4
         with:
-          name: Boodschappen-BeNeLux-Duitsland-1.0.3
+          name: Boodschappen-BeNeLux-Duitsland-1.0.4
           path: benelux/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
