@@ -43,7 +43,7 @@ public class MainActivity extends Activity {
         card=Color.rgb(dark?28:255,dark?39:255,dark?35:253);
         ink=Color.rgb(dark?239:27,dark?246:41,dark?236:37);
         muted=Color.rgb(dark?170:101,dark?187:110,dark?175:104);
-        accent=Color.rgb(dark?81:21,dark?166:91,dark?117:63);
+        accent=Color.rgb(dark?39:21,dark?126:91,dark?75:63);
         soft=Color.rgb(dark?34:232,dark?65:242,dark?53:231);
         border=Color.rgb(dark?54:224,dark?72:229,dark?61:222);
         getWindow().setStatusBarColor(Color.BLACK);
@@ -62,25 +62,46 @@ public class MainActivity extends Activity {
     private void layout(String title){
         root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(canvas);setContentView(root);
         LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView heading=text(title,22,ink);heading.setTypeface(null,1);
+        header.setPadding(dp(12),dp(8),dp(12),dp(6));
+        if(!"home".equals(currentKey)){
+            TextView back=text("‹",32,ink);back.setGravity(Gravity.CENTER);back.setPadding(0,0,0,0);
+            back.setContentDescription("Terug");header.addView(back,new LinearLayout.LayoutParams(dp(44),dp(48)));
+            back.setOnClickListener(v->onBackPressed());
+        }
+        TextView heading=text(title,20,ink);heading.setTypeface(null,1);heading.setSingleLine(true);heading.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        heading.setPadding(dp(8),dp(8),dp(8),dp(8));
         header.addView(heading,new LinearLayout.LayoutParams(0,-2,1));
-        TextView settings=text("⚙",24,accent);settings.setContentDescription("Instellingen");header.addView(settings);
-        settings.setOnClickListener(v->settings());
+        if(!"settings".equals(currentKey)){
+            TextView settings=text("⚙",23,ink);settings.setGravity(Gravity.CENTER);settings.setPadding(0,0,0,0);
+            settings.setContentDescription("Instellingen");header.addView(settings,new LinearLayout.LayoutParams(dp(48),dp(48)));
+            settings.setOnClickListener(v->settings());
+        }
         root.addView(header);
-        ScrollView sc=new ScrollView(this);sc.setFillViewport(true);body=new LinearLayout(this);body.setOrientation(1);body.setPadding(dp(16),dp(2),dp(16),dp(16));sc.addView(body);
+        ScrollView sc=new ScrollView(this);sc.setFillViewport(true);body=new LinearLayout(this);body.setOrientation(1);body.setPadding(dp(20),dp(12),dp(20),dp(24));sc.addView(body);
         root.addView(sc,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout nav=new LinearLayout(this);nav.setBackgroundColor(card);
-        String[] labels={"Home","Lijst","Scan","Winkels","Bonnen"},symbols={"⌂","☷","▣","▥","▤"};
+        String[] labels={"Home","Lijst","Winkels","Bonnen"},symbols={"⌂","☷","▥","▤"};
         for(int i=0;i<labels.length;i++){final String label=labels[i];
             LinearLayout item=new LinearLayout(this);item.setOrientation(1);item.setGravity(Gravity.CENTER);
-            int tint=currentKey.equals(label.toLowerCase(Locale.ROOT))?accent:muted;
+            int tint=currentKey.equals(label.toLowerCase(Locale.ROOT))||("lijst".equals(currentKey)&&label.equals("Lijst"))?accent:muted;
             TextView icon=text(symbols[i],23,tint);icon.setGravity(Gravity.CENTER);icon.setPadding(0,0,0,0);
-            TextView caption=text(label,11,tint);caption.setGravity(Gravity.CENTER);caption.setPadding(0,0,0,0);
-            item.addView(icon);item.addView(caption);nav.addView(item,new LinearLayout.LayoutParams(0,dp(60),1));
+            TextView caption=text(label,12,tint);caption.setGravity(Gravity.CENTER);caption.setPadding(0,0,0,0);
+            item.addView(icon);item.addView(caption);nav.addView(item,new LinearLayout.LayoutParams(0,dp(64),1));
             item.setOnClickListener(v->{
-                switch(label){case "Home":home();break;case "Lijst":list();break;case "Scan":scan();break;case "Bonnen":receipt();break;default:compare();}
+                switch(label){case "Home":home();break;case "Lijst":list();break;case "Bonnen":receipt();break;default:compare();}
             });
         }root.addView(nav);
+    }
+    private void section(String label){TextView t=text(label,19,ink);t.setTypeface(null,1);t.setPadding(dp(2),dp(20),dp(2),dp(12));body.addView(t);}
+    private void cardRow(String icon,String title,String detail,Runnable action){
+        LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(dp(12),dp(10),dp(10),dp(10));row.setBackground(shape(card,18));
+        TextView glyph=text(icon,24,accent);glyph.setGravity(Gravity.CENTER);glyph.setPadding(0,0,0,0);glyph.setBackground(shape(soft,14));row.addView(glyph,new LinearLayout.LayoutParams(dp(48),dp(48)));
+        LinearLayout copy=new LinearLayout(this);copy.setOrientation(1);copy.setPadding(dp(14),0,dp(4),0);
+        TextView main=text(title,17,ink);main.setTypeface(null,1);main.setPadding(0,0,0,0);copy.addView(main);
+        if(detail!=null&&!detail.isEmpty()){TextView sub=text(detail,13,muted);sub.setPadding(0,dp(3),0,0);copy.addView(sub);}
+        row.addView(copy,new LinearLayout.LayoutParams(0,-2,1));
+        if(action!=null){TextView arrow=text("›",26,muted);arrow.setPadding(dp(6),0,dp(4),0);row.addView(arrow);row.setOnClickListener(v->action.run());}
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(10);body.addView(row,p);
     }
     private void line(String s,Runnable action){TextView t=text(s,16,ink);t.setBackground(shape(card,16));
         LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(10);body.addView(t,p);if(action!=null)t.setOnClickListener(v->action.run());}
@@ -90,16 +111,17 @@ public class MainActivity extends Activity {
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
     private EditText input(String hint,String value){EditText e=new EditText(this);e.setSingleLine(true);e.setHint(hint);e.setText(value);e.setTextColor(ink);e.setHintTextColor(muted);e.setBackground(shape(card,14));e.setPadding(dp(16),dp(14),dp(16),dp(14));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(54));p.bottomMargin=dp(10);body.addView(e,p);return e;}
     private void home(){
-        screen("home","Boodschappen BeNeLux-Duitsland",this::home);
-        TextView hello=text("Goedemiddag",30,ink);hello.setTypeface(null,1);body.addView(hello);
-        secondary("⌕  Zoek product met barcode",this::manualBarcode);
-        button("▣  Scan barcode",this::scan);
+        screen("home","Boodschappen",this::home);
+        TextView hello=text("Wat heb je nodig?",29,ink);hello.setTypeface(null,1);hello.setPadding(dp(2),dp(12),dp(2),dp(6));body.addView(hello);
+        TextView intro=text("Houd je lijst en prijzen bij op één plek.",15,muted);intro.setPadding(dp(2),0,dp(2),dp(24));body.addView(intro);
+        button("▣   Scan een product",this::scan);
+        secondary("Barcode invoeren",this::manualBarcode);
         int count=0;try(Cursor c=db.list()){count=c.getCount();}
         final int items=count;
-        line("Mijn lijst  ·  "+items+" producten\nBekijk en wijzig je boodschappen",this::list);
-        line("Bonnen\nLeg betaalde prijzen per winkel vast",this::receipt);
-        line("Winkels vergelijken\nOnbekende prijzen blijven zichtbaar",this::compare);
-        note("Productgegevens: Open Facts (ODbL). Bonprijzen zijn historische aankoopprijzen.");
+        section("Verder gaan");
+        cardRow("☷","Mijn lijst",items==1?"1 product":items+" producten",this::list);
+        cardRow("▥","Winkels","Vergelijk je lijst",this::compare);
+        cardRow("▤","Bonnen","Voeg een betaalde prijs toe",this::receipt);
     }
     private void scan(){GmsBarcodeScanner scanner=GmsBarcodeScanning.getClient(this,new GmsBarcodeScannerOptions.Builder().enableAutoZoom().build());scanner.startScan()
         .addOnSuccessListener(result->{String code=result.getRawValue();if(code!=null&&!code.trim().isEmpty())lookupProduct(code.trim());else toast("Geen barcode gevonden");})
@@ -144,10 +166,10 @@ public class MainActivity extends Activity {
         if(imageUrl!=null&&!imageUrl.isEmpty())productPicture(imageUrl);
         else {TextView placeholder=text("▣",46,accent);placeholder.setGravity(Gravity.CENTER);placeholder.setBackground(shape(soft,20));LinearLayout.LayoutParams ip=new LinearLayout.LayoutParams(-1,dp(154));ip.bottomMargin=dp(12);body.addView(placeholder,ip);}
         TextView productTitle=text(name,25,ink);productTitle.setTypeface(null,1);body.addView(productTitle);
-        note("Barcode "+code);
+        TextView codeLabel=text("Barcode  "+code,13,muted);codeLabel.setPadding(dp(16),0,dp(16),dp(12));body.addView(codeLabel);
         button("+  Voeg toe aan lijst",()->{db.addShopping(code);toast("Toegevoegd aan lijst");});
         secondary("Prijs vastleggen",()->priceForm(code,null,null));
-        TextView pricesTitle=text("Prijs per winkel",21,ink);pricesTitle.setTypeface(null,1);body.addView(pricesTitle);
+        section("Prijzen");
         Map<String,PriceRow> best=new HashMap<>();long now=System.currentTimeMillis();
         try(Cursor c=db.prices(code)){while(c.moveToNext()){
             String shop=c.getString(0);int cents=c.getInt(1);String source=c.getString(2);long observed=c.getLong(3);
@@ -162,7 +184,13 @@ public class MainActivity extends Activity {
         List<PriceRow> rows=new ArrayList<>();
         for(String shop:shops)rows.add(best.containsKey(shop)?best.get(shop):new PriceRow(shop,0,"",0,null,false,4));
         rows.sort((a,b)->{int c=Integer.compare(a.rank>=2?1:0,b.rank>=2?1:0);if(c!=0)return c;c=Integer.compare(a.cents,b.cents);return c!=0?c:a.shop.compareTo(b.shop);});
-        for(PriceRow row:rows)priceRow(row);
+        int known=0;for(PriceRow row:rows)if(row.rank<4){priceRow(row);known++;}
+        if(known==0)note("Nog geen prijzen voor dit product.");
+        final int missing=rows.size()-known;
+        if(missing>0){final boolean[] shown={false};secondary("Toon "+missing+" winkels zonder prijs",()->{
+            if(shown[0])return;shown[0]=true;
+            for(PriceRow row:rows)if(row.rank>=4)priceRow(row);
+        });}
     }
     private static class PriceRow {
         final String shop,source;final int cents,rank;final long observed;final Integer original;final boolean active;
@@ -193,7 +221,7 @@ public class MainActivity extends Activity {
     }
     private void priceRow(PriceRow row){
         String label;
-        if(row.rank>=3)label=row.shop+" — prijs onbekend";
+        if(row.rank>=4)label=row.shop+" — prijs onbekend";
         else if(row.active)label=row.shop+"  "+(row.original!=null?euro(row.original)+"  ":"")+euro(row.cents)+"  ACTIE";
         else label=row.shop+"  "+euro(row.cents)+"  "+(row.source.equals("BON")?"bon van ":"waargenomen ")+date(row.observed)+(row.rank==2?" (historisch)":"");
         TextView t=text(label,16,ink);t.setBackground(shape(card,15));
@@ -207,8 +235,8 @@ public class MainActivity extends Activity {
     }
     private String euro(int cents){return String.format(Locale.GERMANY,"€ %.2f",cents/100.0);}
     private String date(long ms){return new SimpleDateFormat("dd-MM-yyyy",Locale.getDefault()).format(new Date(ms));}
-    private void list(){screen("lijst","Boodschappenlijst",this::list);int count=0;try(Cursor c=db.list()){while(c.moveToNext()){count++;String code=c.getString(0),name=c.getString(1);int qty=c.getInt(2);line(qty+" × "+name+"\n"+code,()->product(code));}}if(count==0)note("Je lijst is nog leeg.");button("Barcode scannen",this::scan);button("Barcode invoeren",this::manualBarcode);button("Winkels vergelijken",this::compare);}
-    private void compare(){screen("winkels","Winkels vergelijken",this::compare);int n=0;try(Cursor c=db.list()){n=c.getCount();}if(n==0){note("Voeg eerst producten toe aan je lijst.");return;}for(String shop:shops){int found=0;long total=0;try(Cursor c=db.allForShop(shop)){while(c.moveToNext()){if(!c.isNull(3)){found++;total+=(long)c.getInt(2)*c.getInt(3);}}}final int matched=found;final long sum=total;line(shop+" — "+matched+"/"+n+" prijzen"+(matched==n?" · totaal "+euro((int)Math.min(sum,Integer.MAX_VALUE)):" · totaal onvolledig"),()->shopDetails(shop));}}
+    private void list(){screen("lijst","Mijn lijst",this::list);int count=0;try(Cursor c=db.list()){while(c.moveToNext()){count++;String code=c.getString(0),name=c.getString(1);int qty=c.getInt(2);cardRow("✓",name,qty+" ×",()->product(code));}}if(count==0)note("Je lijst is leeg. Scan een product om te beginnen.");section("Toevoegen");button("▣   Scan product",this::scan);secondary("Barcode invoeren",this::manualBarcode);if(count>0)cardRow("▥","Vergelijk winkels","Bekijk prijzen voor je lijst",this::compare);}
+    private void compare(){screen("winkels","Winkels",this::compare);int n=0;try(Cursor c=db.list()){n=c.getCount();}if(n==0){note("Voeg eerst producten toe aan je lijst.");button("Scan product",this::scan);return;}note("Prijsdekking voor je lijst van "+n+" producten");for(String shop:shops){int found=0;long total=0;try(Cursor c=db.allForShop(shop)){while(c.moveToNext()){if(!c.isNull(3)){found++;total+=(long)c.getInt(2)*c.getInt(3);}}}final int matched=found;final long sum=total;cardRow("▥",shop,matched==n?euro((int)Math.min(sum,Integer.MAX_VALUE))+" · alle prijzen bekend":matched+" van "+n+" prijzen bekend",()->shopDetails(shop));}}
     private void shopDetails(String shop){screen("shop:"+shop,shop,()->shopDetails(shop));int missing=0;long total=0;try(Cursor c=db.allForShop(shop)){while(c.moveToNext()){String name=c.getString(1);int qty=c.getInt(2);if(c.isNull(3)){missing++;line(qty+" × "+name+" — prijs onbekend",null);}else{int amount=c.getInt(3);total+=(long)qty*amount;line(qty+" × "+name+" — "+euro(amount)+" per stuk",null);}}}note(missing==0?"Volledig op basis van recent vastgelegde prijzen: "+euro((int)Math.min(total,Integer.MAX_VALUE)):"Totaal onvolledig: "+missing+" prijsregels ontbreken.");}
     private Integer parseCents(String s){String v=s.trim().replace("€","").replace(" ","").replace(",",".");try{java.math.BigDecimal n=new java.math.BigDecimal(v);int cents=n.movePointRight(2).intValueExact();return cents<0?null:cents;}catch(Exception ex){return null;}}
     private void priceForm(String code,String suggestedShop,String suggestedAmount){screen("price:"+code,"Prijs vastleggen",()->priceForm(code,suggestedShop,suggestedAmount));note("Product: "+db.productName(code));EditText shop=input("Winkel",suggestedShop==null?"":suggestedShop);EditText amount=input("Betaalde prijs in euro",suggestedAmount==null?"":suggestedAmount);
@@ -216,7 +244,7 @@ public class MainActivity extends Activity {
         button("Bewaar als handmatig geobserveerde prijs",()->{String s=shop.getText().toString().trim();Integer c=parseCents(amount.getText().toString());if(s.isEmpty()||c==null){toast("Controleer winkel en prijs");return;}db.recordPrice(code,s,c,"HANDMATIG",null,null);product(code);});
         button("Actie vastleggen",()->{String s=shop.getText().toString().trim();Integer c=parseCents(amount.getText().toString());if(s.isEmpty()||c==null){toast("Controleer winkel en actieprijs");return;}actionForm(code,s,c);});}
     private void actionForm(String code,String shop,int cents){screen("action:"+code,"Actie controleren",()->actionForm(code,shop,cents));note(shop+" — "+euro(cents));EditText original=input("Normale prijs (€), optioneel","");EditText days=input("Nog geldig (aantal dagen)","7");button("Actie bewaren",()->{try{int d=Integer.parseInt(days.getText().toString().trim());Integer regular=original.getText().toString().trim().isEmpty()?null:parseCents(original.getText().toString());if(d<1||d>365||(!original.getText().toString().trim().isEmpty()&&regular==null)){toast("Controleer prijs en geldigheid");return;}db.recordPrice(code,shop,cents,"ACTIE",System.currentTimeMillis()+86400000L*d,regular);product(code);}catch(Exception e){toast("Vul een geldig aantal dagen in");}});}
-    private void receipt(){screen("bonnen","Bonnen",this::receipt);note("Maak een foto en controleer de herkende tekst. Bonregels hebben meestal geen barcode; koppel elke prijs zelf aan het juiste product.");button("Foto van bon maken",()->{try{Intent i=new Intent("android.media.action.IMAGE_CAPTURE");startActivityForResult(i,CAMERA_REQUEST);}catch(Exception e){toast("Geen camera-app beschikbaar");}});button("Volledige bonfoto kiezen",()->{Intent i=new Intent(Intent.ACTION_GET_CONTENT);i.setType("image/*");startActivityForResult(i,GALLERY_REQUEST);});button("Bonprijs handmatig toevoegen",this::manualReceipt);}
+    private void receipt(){screen("bonnen","Bonnen",this::receipt);note("Voeg een bon toe om betaalde prijzen te bewaren.");section("Bon toevoegen");button("Foto van bon maken",()->{try{Intent i=new Intent("android.media.action.IMAGE_CAPTURE");startActivityForResult(i,CAMERA_REQUEST);}catch(Exception e){toast("Geen camera-app beschikbaar");}});secondary("Foto kiezen",()->{Intent i=new Intent(Intent.ACTION_GET_CONTENT);i.setType("image/*");startActivityForResult(i,GALLERY_REQUEST);});cardRow("+","Prijs handmatig toevoegen","Zonder bonfoto",this::manualReceipt);}
     private void manualReceipt(){screen("manualReceipt","Bonprijs toevoegen",this::manualReceipt);EditText barcode=input("Barcode van gekocht product","");EditText shop=input("Winkel","");EditText name=input("Productnaam als nieuw product","");EditText amount=input("Prijs (€)","");button("Controleer en bewaar",()->{String b=barcode.getText().toString().trim(),s=shop.getText().toString().trim();Integer cents=parseCents(amount.getText().toString());if(b.isEmpty()||s.isEmpty()||cents==null){toast("Barcode, winkel en prijs zijn verplicht");return;}if(db.productName(b)==null){String n=name.getText().toString().trim();if(n.isEmpty()){toast("Vul ook de productnaam in");return;}db.product(b,n,"");}db.recordPrice(b,s,cents,"BON",null,null);product(b);});}
     @Override protected void onActivityResult(int req,int result,Intent data){
         super.onActivityResult(req,result,data);
