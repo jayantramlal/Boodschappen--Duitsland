@@ -74,4 +74,4 @@ jobs:
           name: Boodschappen-Duitsland-APK-1.0.3
           path: artifact/*
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 10
