@@ -601,4 +601,4 @@ jobs:
             Albert_Heijn_volledig.json.sha256
             Albert_Heijn_database_rapport.txt
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 10
