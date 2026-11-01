@@ -82,6 +82,46 @@ jobs:
         run: |
           set -euo pipefail
           printf 'repository=%s\nversion=%s\nsource_commit=%s\noriginal_successful_run=%s\napproval=manual_confirmed\n' "$REPO" "$VERSION" "$SOURCE_SHA" "$RUN_ID" > release-assets/BUILD-MANIFEST.txt
+          # Geen sleutelbestanden in publieke of private GitHub Releases archiveren.
+          if find . -type f \( -iname '*.jks' -o -iname '*.keystore' -o -iname '*.p12' -o -iname '*.pfx' -o -iname '*.pem' -o -iname '*.key' -o -name '.env' -o -name 'signing.env' \) -not -path './.git/*' -print -quit | grep -q .; then
+            echo '::error::Broncode bevat mogelijk geheime sleutelbestanden. Release geblokkeerd.'
+            exit 1
+          fi
+          while IFS= read -r -d '' ZIP; do
+            if unzip -Z1 "$ZIP" 2>/dev/null | grep -Ei '(^|/)([^/]+\.(jks|keystore|p12|pfx|pem|key)|\.env|signing\.env)
+          (cd release-assets && sha256sum "app-v$VERSION.apk" "source-v$VERSION.tar.gz" > SHA256SUMS.txt)
+      - name: Maak blijvende GitHub Release
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.original.outputs.sha }}
+          TAG: ${{ steps.original.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" release-assets/* --repo "$REPO" --target "$SOURCE_SHA" --title "Gecontroleerde versie $VERSION" --notes "Goedgekeurde APK van succesvolle Actions-run $RUN_ID (commit $SOURCE_SHA). Broncodearchief, manifest en SHA256-checksums aanwezig. Secrets en keystores blijven apart in beveiligde opslag; deze release bevat GEEN secrets. Herbouw vereist dat de bijbehorende secrets en externe afhankelijkheden beschikbaar zijn."
+      - name: Verifieer release en verwijder alleen overtollige beheerde releases
+        shell: bash
+        env:
+          TAG: ${{ steps.original.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json assets > "$RUNNER_TEMP/created.json"
+          jq -e '([.assets[].name] | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz")))' "$RUNNER_TEMP/created.json" >/dev/null
+          gh api --paginate "repos/$REPO/releases?per_page=100" | jq -s '[.[][] | select(.draft == false and .prerelease == false and (.tag_name | startswith("verified-v"))) | {tag:.tag_name, assets:[.assets[].name]} | select((.assets | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz"))))]' > "$RUNNER_TEMP/verified-unsorted.json"
+          jq -r '.[].tag' "$RUNNER_TEMP/verified-unsorted.json" | sed 's/^verified-v//' | sort -Vr | sed 's/^/verified-v/' > "$RUNNER_TEMP/ordered-tags.txt"
+          jq -Rn '[inputs]' < "$RUNNER_TEMP/ordered-tags.txt" > "$RUNNER_TEMP/verified.json"
+          COUNT=$(jq 'length' "$RUNNER_TEMP/verified.json")
+          echo "Geldige beheerde releases: $COUNT"
+          if (( COUNT > 3 )); then
+            jq -r '.[3:][]' "$RUNNER_TEMP/verified.json" | while IFS= read -r OLD; do
+              echo "Verwijderen van overtollige release: $OLD (Git-tag en geschiedenis blijven behouden)"
+              gh release delete "$OLD" --repo "$REPO" --yes
+            done
+          fi
+ >/dev/null; then
+              echo '::error::Bron-ZIP bevat mogelijk geheime sleutelbestanden. Release geblokkeerd.'
+              exit 1
+            fi
+          done < <(find . -type f -iname '*.zip' -not -path './.git/*' -print0)
           tar --exclude='./.git' --exclude='./release-assets' --exclude='./build' --exclude='./.gradle' --exclude='./app/build' -czf "release-assets/source-v$VERSION.tar.gz" .
           (cd release-assets && sha256sum "app-v$VERSION.apk" "source-v$VERSION.tar.gz" > SHA256SUMS.txt)
       - name: Maak blijvende GitHub Release
