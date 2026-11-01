@@ -13,3 +13,13 @@
 ## Veiligheidsslot voor opruimen
 
 Het opruimen van overtollige beheerde releases is **standaard uitgeschakeld**. Het wordt pas actief wanneer repositoryvariabele `RELEASE_BACKUP_VERIFIED` exact `true` is, nadat de signing-key-, secret- en herstelback-ups afzonderlijk aantoonbaar zijn gecontroleerd. Alleen de drie nieuwste goedgekeurde releases tellen; een succesvolle build alleen is geen functionele goedkeuring. De workflow kan deze back-ups niet zelf uitlezen of testen. Zonder deze bevestiging blijven alle beheerde releases staan.
+
+## Verplicht herstelbeleid bij mislukte installatie of test
+
+- **Een geslaagde GitHub-build of een downloadbare APK/installer is nog geen gebruikersgoedkeuring.** Goedkeuring volgt pas nadat de gebruiker het bestand daadwerkelijk kan installeren, starten en voldoende heeft getest.
+- Bewaar nieuwe niet-geteste builds desgewenst tijdelijk als kandidaat; verwijder of overschrijf nooit de laatst geteste, werkende basisversie door het verschijnen van een kandidaat.
+- Bij een mislukte installatie, opstartfout of afkeuring is de **laatst daadwerkelijk geïnstalleerde en goedgekeurde versie** de verplichte bronbasis voor het volgende herstel. Gebruik de mislukte build niet als nieuwe basis.
+- Inventariseer de wijzigingen tussen de goede basisversie en de afgekeurde build(s), en pas **alle gewenste wijzigingen opnieuw toe** op de goede basis. Behoud alleen expliciet gewenste verbeteringen; neem defecte of ongewenste effecten niet over.
+- Bouw opnieuw, controleer handtekening/updatecompatibiliteit en lever opnieuw ter installatie en gebruikerstest. Een buildworkflow kan dit ontwikkelwerk niet zelfstandig garanderen: de wijzigingstoepassing en functionele goedkeuring vereisen afzonderlijke controles.
+- De beheerde duurzaam **goedgekeurde** geschiedenis bevat de huidige goede basisversie en de vorige goedgekeurde edities (maximaal **3** voor gewone repositories; **10** voor Jay's Kilometerregistratie). Alleen goedgekeurde, volledige nieuwe archieven tellen mee voor rotatie.
+- **Nooit** een oudste goedgekeurde versie verwijderen doordat alleen een nieuwe kandidaat succesvol bouwt. Opschonen pas na bevestigde goedkeuring, verificatie van de nieuwe release, en het bestaande veiligheidsslot `RELEASE_BACKUP_VERIFIED=true`.
