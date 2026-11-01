@@ -23,3 +23,13 @@ Het opruimen van overtollige beheerde releases is **standaard uitgeschakeld**. H
 - Bouw opnieuw, controleer handtekening/updatecompatibiliteit en lever opnieuw ter installatie en gebruikerstest. Een buildworkflow kan dit ontwikkelwerk niet zelfstandig garanderen: de wijzigingstoepassing en functionele goedkeuring vereisen afzonderlijke controles.
 - De beheerde duurzaam **goedgekeurde** geschiedenis bevat de huidige goede basisversie en de vorige goedgekeurde edities (maximaal **3** voor gewone repositories; **10** voor Jay's Kilometerregistratie). Alleen goedgekeurde, volledige nieuwe archieven tellen mee voor rotatie.
 - **Nooit** een oudste goedgekeurde versie verwijderen doordat alleen een nieuwe kandidaat succesvol bouwt. Opschonen pas na bevestigde goedkeuring, verificatie van de nieuwe release, en het bestaande veiligheidsslot `RELEASE_BACKUP_VERIFIED=true`.
+
+## Automatische cyclus (vanaf november 2026)
+
+- Na iedere bouwrun van de repository wordt de kandidaat automatisch geregistreerd door de `workflow_run`-trigger. **De status van een build is geen bewijs van een geslaagde installatie.**
+- Na daadwerkelijke installatie en test archiveren we de exact gedownloade build via **Actions → Bewaar geteste releases → Run workflow** (versie, juiste run-ID, `checked`). De GitHub-koppeling kan deze goedkeuring niet afleiden uit het downloaden van een bestand.
+- Een goedgekeurde release bevat het uitvoerbestand (APK of Windows-EXE), oorspronkelijke broncode, SHA256-controlesommen en buildmanifest. Alleen goedgekeurde versies tellen in de bewaarlimiet mee.
+- Na archiveren kan GitHub zonder extra handeling de oudste **overtollige goedgekeurde** release verwijderen, maar alleen wanneer `RELEASE_BACKUP_VERIFIED=true`. Standaard blijft opschonen vergrendeld; niet-geteste downloads en oude Git-commits zijn geen vervanging voor herstelbare back-ups.
+- Bij een niet-installeerbare build blijven de laatst goedgekeurde versie en de twee voorgangers (bij Kilometerregistratie negen voorgangers) de ontwikkelbasis. Alle gewenste wijzigingen worden vanaf die basis opnieuw toegepast.
+- Ondersteunde archiefbestanden in de huidige workflows: Android `.apk`, Windows `.exe`. Bij andere uitvoerextensies moet de bestandsselectie eerst veilig worden aangepast.
+- Deze archiveringscode is nieuw geïnstalleerd en de volledige productierotatie moet nog met een goedgekeurde release en veilig dry-run-scenario worden getest voordat automatisch verwijderen wordt vrijgegeven.
