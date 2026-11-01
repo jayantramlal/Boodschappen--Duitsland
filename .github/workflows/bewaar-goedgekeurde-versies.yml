@@ -111,6 +111,11 @@ jobs:
           jq -Rn '[inputs]' < "$RUNNER_TEMP/ordered-tags.txt" > "$RUNNER_TEMP/verified.json"
           COUNT=$(jq 'length' "$RUNNER_TEMP/verified.json")
           echo "Geldige beheerde releases: $COUNT"
+          # Opschonen pas toestaan na afzonderlijk gecontroleerde secret-/keystore-back-up.
+          if [[ "${{ vars.RELEASE_BACKUP_VERIFIED }}" != "true" ]]; then
+            echo "Verwijderen uitgeschakeld: RELEASE_BACKUP_VERIFIED is niet true."
+            exit 0
+          fi
           if (( COUNT > 3 )); then
             jq -r '.[3:][]' "$RUNNER_TEMP/verified.json" | while IFS= read -r OLD; do
               echo "Verwijderen van overtollige release: $OLD (Git-tag en geschiedenis blijven behouden)"
