@@ -1,0 +1,111 @@
+name: Bewaar gecontroleerde app-versie (laatste 3)
+run-name: Bewaar ${{ inputs.version }} uit build ${{ inputs.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Goedgekeurd app-versienummer (bv. 1.5.14)'
+        required: true
+        type: string
+      run_id:
+        description: 'GitHub Actions run-ID van de succesvolle, gecontroleerde APK-build'
+        required: true
+        type: string
+      checked:
+        description: 'Ik bevestig dat de APK is getest en goedgekeurd'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: bewaar-goedgekeurde-releases
+  cancel-in-progress: false
+
+jobs:
+  preserve:
+    if: ${{ inputs.checked == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+      RUN_ID: ${{ inputs.run_id }}
+    steps:
+      - name: Controleer goedgekeurde oorspronkelijke build
+        id: original
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || { echo "::error::Ongeldig versienummer"; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || exit 1
+          gh api "repos/$REPO/actions/runs/$RUN_ID" > "$RUNNER_TEMP/run.json"
+          jq -e '.conclusion == "success" and .status == "completed" and (.head_sha | length == 40)' "$RUNNER_TEMP/run.json" >/dev/null
+          SHA=$(jq -r '.head_sha' "$RUNNER_TEMP/run.json")
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          TAG="verified-v$VERSION"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "::error::Deze goedgekeurde versie bestaat al; overschrijven is verboden."
+            exit 1
+          fi
+      - name: Haal exacte broncode op
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.original.outputs.sha }}
+          fetch-depth: 1
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+      - name: Download APK van geslaagde build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/build-artifacts" release-assets
+          gh run download "$RUN_ID" --repo "$REPO" --dir "$RUNNER_TEMP/build-artifacts"
+          mapfile -d '' APKS < <(find "$RUNNER_TEMP/build-artifacts" -type f -iname '*.apk' -print0)
+          [[ "${#APKS[@]}" -eq 1 ]] || { echo "::error::Verwacht exact 1 APK in deze build; gevonden: ${#APKS[@]}"; exit 1; }
+          cp "${APKS[0]}" "release-assets/app-v$VERSION.apk"
+          test -s "release-assets/app-v$VERSION.apk"
+          APKSIGNER=$(find "${ANDROID_HOME:-/opt/android-sdk}/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -1)
+          test -n "$APKSIGNER" || { echo "::error::APK-ondertekening kan niet gecontroleerd worden."; exit 1; }
+          "$APKSIGNER" verify --verbose "release-assets/app-v$VERSION.apk"
+      - name: Bewaar broncode en bouwinformatie
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.original.outputs.sha }}
+        run: |
+          set -euo pipefail
+          printf 'repository=%s\nversion=%s\nsource_commit=%s\noriginal_successful_run=%s\napproval=manual_confirmed\n' "$REPO" "$VERSION" "$SOURCE_SHA" "$RUN_ID" > release-assets/BUILD-MANIFEST.txt
+          tar --exclude='./.git' --exclude='./release-assets' --exclude='./build' --exclude='./.gradle' --exclude='./app/build' -czf "release-assets/source-v$VERSION.tar.gz" .
+          (cd release-assets && sha256sum "app-v$VERSION.apk" "source-v$VERSION.tar.gz" > SHA256SUMS.txt)
+      - name: Maak blijvende GitHub Release
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.original.outputs.sha }}
+          TAG: ${{ steps.original.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" release-assets/* --repo "$REPO" --target "$SOURCE_SHA" --title "Gecontroleerde versie $VERSION" --notes "Goedgekeurde APK van succesvolle Actions-run $RUN_ID (commit $SOURCE_SHA). Broncodearchief, manifest en SHA256-checksums aanwezig. Secrets en keystores blijven apart in beveiligde opslag; deze release bevat GEEN secrets. Herbouw vereist dat de bijbehorende secrets en externe afhankelijkheden beschikbaar zijn."
+      - name: Verifieer release en verwijder alleen overtollige beheerde releases
+        shell: bash
+        env:
+          TAG: ${{ steps.original.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json assets > "$RUNNER_TEMP/created.json"
+          jq -e '([.assets[].name] | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz")))' "$RUNNER_TEMP/created.json" >/dev/null
+          gh api --paginate "repos/$REPO/releases?per_page=100" | jq -s '[.[][] | select(.draft == false and .prerelease == false and (.tag_name | startswith("verified-v"))) | {tag:.tag_name, created:.created_at, assets:[.assets[].name]} | select((.assets | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz"))))] | sort_by(.created) | reverse' > "$RUNNER_TEMP/verified.json"
+          COUNT=$(jq 'length' "$RUNNER_TEMP/verified.json")
+          echo "Geldige beheerde releases: $COUNT"
+          if (( COUNT > 3 )); then
+            jq -r '.[3:][].tag' "$RUNNER_TEMP/verified.json" | while IFS= read -r OLD; do
+              echo "Verwijderen van overtollige release: $OLD (Git-tag en geschiedenis blijven behouden)"
+              gh release delete "$OLD" --repo "$REPO" --yes
+            done
+          fi
