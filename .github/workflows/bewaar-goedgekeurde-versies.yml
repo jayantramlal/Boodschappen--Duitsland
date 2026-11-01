@@ -1,158 +1,190 @@
-name: Bewaar gecontroleerde app-versie (laatste 3)
-run-name: Bewaar ${{ inputs.version }} uit build ${{ inputs.run_id }}
+name: Bewaar geteste releases (laatste 3)
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Archiveer {0} van build {1}', inputs.version, inputs.run_id) || 'Controleer nieuwe buildkandidaat' }}
 
 on:
+  workflow_run:
+    workflows:
+      - 'Bouw Boodschappen Duitsland APK'
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       version:
-        description: 'Goedgekeurd app-versienummer (bv. 1.5.14)'
-        required: true
+        description: 'Versie die op het apparaat is getest en goedgekeurd'
         type: string
+        required: true
       run_id:
-        description: 'GitHub Actions run-ID van de succesvolle, gecontroleerde APK-build'
-        required: true
+        description: 'GitHub Actions-run-ID die de geteste download heeft gebouwd'
         type: string
-      checked:
-        description: 'Ik bevestig dat de APK is getest en goedgekeurd'
         required: true
+      checked:
+        description: 'Ik heb deze exacte download geinstalleerd/getest en goedgekeurd'
         type: boolean
         default: false
+        required: true
 
 permissions:
   contents: write
   actions: read
 
 concurrency:
-  group: bewaar-goedgekeurde-releases
+  group: gecontroleerde-release-rotatie
   cancel-in-progress: false
 
 jobs:
-  preserve:
-    if: ${{ inputs.checked == true }}
+  kandidaat:
+    if: ${{ github.event_name == 'workflow_run' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Noteer uitkomst zonder versies te verwijderen
+        shell: bash
+        env:
+          RESULTAAT: ${{ github.event.workflow_run.conclusion }}
+          BUILD_RUN: ${{ github.event.workflow_run.id }}
+          BUILD_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          if [[ "$RESULTAAT" == 'success' ]]; then
+            echo "Build $BUILD_RUN is technisch geslaagd. Nog NIET goedgekeurd."
+            echo "### Nieuwe download ter controle" >> "$GITHUB_STEP_SUMMARY"
+            echo "Build: $BUILD_URL" >> "$GITHUB_STEP_SUMMARY"
+            echo "Installeer/test de download en archiveer pas daarna via Run workflow." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Build $BUILD_RUN is niet geslaagd. De laatst goedgekeurde versie blijft de basis."
+          fi
+
+  archiveren:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.checked == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       VERSION: ${{ inputs.version }}
-      RUN_ID: ${{ inputs.run_id }}
+      BUILD_RUN_ID: ${{ inputs.run_id }}
     steps:
-      - name: Controleer goedgekeurde oorspronkelijke build
-        id: original
+      - name: Valideer goedgekeurde bronbuild
+        id: bronbuild
         shell: bash
         run: |
           set -euo pipefail
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || { echo "::error::Ongeldig versienummer"; exit 1; }
-          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || exit 1
-          gh api "repos/$REPO/actions/runs/$RUN_ID" > "$RUNNER_TEMP/run.json"
-          jq -e '.conclusion == "success" and .status == "completed" and (.head_sha | length == 40)' "$RUNNER_TEMP/run.json" >/dev/null
-          SHA=$(jq -r '.head_sha' "$RUNNER_TEMP/run.json")
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::Ongeldige build-run-ID"; exit 1; }
+          gh api "repos/$REPO/actions/runs/$BUILD_RUN_ID" > "$RUNNER_TEMP/build.json"
+          jq -e --arg expected 'Bouw Boodschappen Duitsland APK' '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == $expected and
+            .head_repository.full_name == env.REPO and
+            (.head_sha | length == 40)
+          ' "$RUNNER_TEMP/build.json" > /dev/null
+          SHA=$(jq -r '.head_sha' "$RUNNER_TEMP/build.json")
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          TAG="verified-v$VERSION"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "::error::Deze goedgekeurde versie bestaat al; overschrijven is verboden."
+          if gh release view "verified-v$VERSION" --repo "$REPO" >/dev/null 2>&1; then
+            echo "::error::Versie bestaat al als definitief goedgekeurde release."
             exit 1
           fi
-      - name: Haal exacte broncode op
+
+      - name: Haal broncode van exacte build op
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.original.outputs.sha }}
-          fetch-depth: 1
+          ref: ${{ steps.bronbuild.outputs.sha }}
+          persist-credentials: false
           submodules: recursive
           lfs: true
-          persist-credentials: false
-      - name: Download APK van geslaagde build
+
+      - name: Download exact het bijbehorende uitvoerbestand
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/build-artifacts" release-assets
-          gh run download "$RUN_ID" --repo "$REPO" --dir "$RUNNER_TEMP/build-artifacts"
-          mapfile -d '' APKS < <(find "$RUNNER_TEMP/build-artifacts" -type f -iname '*.apk' -print0)
-          [[ "${#APKS[@]}" -eq 1 ]] || { echo "::error::Verwacht exact 1 APK in deze build; gevonden: ${#APKS[@]}"; exit 1; }
-          cp "${APKS[0]}" "release-assets/app-v$VERSION.apk"
-          test -s "release-assets/app-v$VERSION.apk"
-          APKSIGNER=$(find "${ANDROID_HOME:-/opt/android-sdk}/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -1)
-          test -n "$APKSIGNER" || { echo "::error::APK-ondertekening kan niet gecontroleerd worden."; exit 1; }
-          "$APKSIGNER" verify --verbose "release-assets/app-v$VERSION.apk"
-      - name: Bewaar broncode en bouwinformatie
+          mkdir -p "$RUNNER_TEMP/download" release-files
+          gh run download "$BUILD_RUN_ID" --repo "$REPO" --dir "$RUNNER_TEMP/download"
+          mapfile -d '' BINARIES < <(find "$RUNNER_TEMP/download" -type f -iname '*.apk' -print0)
+          if (( ${#BINARIES[@]} != 1 )); then
+            echo "::error::Verwacht exact een .apk-bestand in deze run, gevonden: ${#BINARIES[@]}"
+            exit 1
+          fi
+          cp "${BINARIES[0]}" "release-files/app-v$VERSION.apk"
+          test -s "release-files/app-v$VERSION.apk"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "release-files/app-v$VERSION.apk"
+
+      - name: Controleer bronarchief op bekende sleutelbestandsnamen
         shell: bash
-        env:
-          SOURCE_SHA: ${{ steps.original.outputs.sha }}
         run: |
           set -euo pipefail
-          printf 'repository=%s\nversion=%s\nsource_commit=%s\noriginal_successful_run=%s\napproval=manual_confirmed\n' "$REPO" "$VERSION" "$SOURCE_SHA" "$RUN_ID" > release-assets/BUILD-MANIFEST.txt
-          # Geen sleutelbestanden in publieke of private GitHub Releases archiveren.
           if find . -type f \( -iname '*.jks' -o -iname '*.keystore' -o -iname '*.p12' -o -iname '*.pfx' -o -iname '*.pem' -o -iname '*.key' -o -name '.env' -o -name 'signing.env' \) -not -path './.git/*' -print -quit | grep -q .; then
-            echo '::error::Broncode bevat mogelijk geheime sleutelbestanden. Release geblokkeerd.'
+            echo "::error::Mogelijke geheime sleutelbestanden gevonden; archivering geblokkeerd."
             exit 1
           fi
           while IFS= read -r -d '' ZIP; do
-            if unzip -Z1 "$ZIP" 2>/dev/null | grep -Ei '(^|/)([^/]+\.(jks|keystore|p12|pfx|pem|key)|\.env|signing\.env)
-          (cd release-assets && sha256sum "app-v$VERSION.apk" "source-v$VERSION.tar.gz" > SHA256SUMS.txt)
-      - name: Maak blijvende GitHub Release
-        shell: bash
-        env:
-          SOURCE_SHA: ${{ steps.original.outputs.sha }}
-          TAG: ${{ steps.original.outputs.tag }}
-        run: |
-          set -euo pipefail
-          gh release create "$TAG" release-assets/* --repo "$REPO" --target "$SOURCE_SHA" --title "Gecontroleerde versie $VERSION" --notes "Goedgekeurde APK van succesvolle Actions-run $RUN_ID (commit $SOURCE_SHA). Broncodearchief, manifest en SHA256-checksums aanwezig. Secrets en keystores blijven apart in beveiligde opslag; deze release bevat GEEN secrets. Herbouw vereist dat de bijbehorende secrets en externe afhankelijkheden beschikbaar zijn."
-      - name: Verifieer release en verwijder alleen overtollige beheerde releases
-        shell: bash
-        env:
-          TAG: ${{ steps.original.outputs.tag }}
-        run: |
-          set -euo pipefail
-          gh release view "$TAG" --repo "$REPO" --json assets > "$RUNNER_TEMP/created.json"
-          jq -e '([.assets[].name] | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz")))' "$RUNNER_TEMP/created.json" >/dev/null
-          gh api --paginate "repos/$REPO/releases?per_page=100" | jq -s '[.[][] | select(.draft == false and .prerelease == false and (.tag_name | startswith("verified-v"))) | {tag:.tag_name, assets:[.assets[].name]} | select((.assets | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz"))))]' > "$RUNNER_TEMP/verified-unsorted.json"
-          jq -r '.[].tag' "$RUNNER_TEMP/verified-unsorted.json" | sed 's/^verified-v//' | sort -Vr | sed 's/^/verified-v/' > "$RUNNER_TEMP/ordered-tags.txt"
-          jq -Rn '[inputs]' < "$RUNNER_TEMP/ordered-tags.txt" > "$RUNNER_TEMP/verified.json"
-          COUNT=$(jq 'length' "$RUNNER_TEMP/verified.json")
-          echo "Geldige beheerde releases: $COUNT"
-          # Opschonen pas toestaan na afzonderlijk gecontroleerde secret-/keystore-back-up.
-          if [[ "${{ vars.RELEASE_BACKUP_VERIFIED }}" != "true" ]]; then
-            echo "Verwijderen uitgeschakeld: RELEASE_BACKUP_VERIFIED is niet true."
-            exit 0
-          fi
-          if (( COUNT > 3 )); then
-            jq -r '.[3:][]' "$RUNNER_TEMP/verified.json" | while IFS= read -r OLD; do
-              echo "Verwijderen van overtollige release: $OLD (Git-tag en geschiedenis blijven behouden)"
-              gh release delete "$OLD" --repo "$REPO" --yes
-            done
-          fi
- >/dev/null; then
-              echo '::error::Bron-ZIP bevat mogelijk geheime sleutelbestanden. Release geblokkeerd.'
+            if unzip -Z1 "$ZIP" 2>/dev/null | grep -Ei '(^|/)([^/]+\.(jks|keystore|p12|pfx|pem|key)|\.env|signing\.env)$' >/dev/null; then
+              echo "::error::Mogelijke geheime sleutelbestanden in bron-ZIP; archivering geblokkeerd."
               exit 1
             fi
           done < <(find . -type f -iname '*.zip' -not -path './.git/*' -print0)
-          tar --exclude='./.git' --exclude='./release-assets' --exclude='./build' --exclude='./.gradle' --exclude='./app/build' -czf "release-assets/source-v$VERSION.tar.gz" .
-          (cd release-assets && sha256sum "app-v$VERSION.apk" "source-v$VERSION.tar.gz" > SHA256SUMS.txt)
-      - name: Maak blijvende GitHub Release
+
+      - name: Maak bronarchief en controlebestanden
         shell: bash
         env:
-          SOURCE_SHA: ${{ steps.original.outputs.sha }}
-          TAG: ${{ steps.original.outputs.tag }}
+          SOURCE_SHA: ${{ steps.bronbuild.outputs.sha }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" release-assets/* --repo "$REPO" --target "$SOURCE_SHA" --title "Gecontroleerde versie $VERSION" --notes "Goedgekeurde APK van succesvolle Actions-run $RUN_ID (commit $SOURCE_SHA). Broncodearchief, manifest en SHA256-checksums aanwezig. Secrets en keystores blijven apart in beveiligde opslag; deze release bevat GEEN secrets. Herbouw vereist dat de bijbehorende secrets en externe afhankelijkheden beschikbaar zijn."
-      - name: Verifieer release en verwijder alleen overtollige beheerde releases
+          printf 'repository=%s\nversion=%s\nsource_sha=%s\nsource_run_id=%s\napproved_by=%s\n' \
+            "$REPO" "$VERSION" "$SOURCE_SHA" "$BUILD_RUN_ID" "$GITHUB_ACTOR" > release-files/BUILD-MANIFEST.txt
+          tar --exclude='./.git' --exclude='./release-files' --exclude='./build' --exclude='./.gradle' --exclude='./app/build' \
+            -czf "release-files/source-v$VERSION.tar.gz" .
+          (cd release-files && sha256sum "app-v$VERSION.apk" "source-v$VERSION.tar.gz" > SHA256SUMS.txt)
+
+      - name: Publiceer goedgekeurde release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "verified-v$VERSION" release-files/* \
+            --repo "$REPO" --target "$GITHUB_SHA" \
+            --title "Gecontroleerde versie $VERSION" \
+            --notes "Door gebruiker goedgekeurde download uit succesvolle build $BUILD_RUN_ID. Originele broncommit staat in BUILD-MANIFEST.txt. Secrets en signing-keys worden afzonderlijk bewaard."
+          gh release view "verified-v$VERSION" --repo "$REPO" --json assets > "$RUNNER_TEMP/release.json"
+          jq -e --arg ver "$VERSION" --arg ext 'apk' '
+            [.assets[].name] as $names |
+            ($names | index("app-v" + $ver + "." + $ext) != null) and
+            ($names | index("source-v" + $ver + ".tar.gz") != null) and
+            ($names | index("SHA256SUMS.txt") != null) and
+            ($names | index("BUILD-MANIFEST.txt") != null)
+          ' "$RUNNER_TEMP/release.json" >/dev/null
+
+      - name: Roteer alleen geverifieerde releases na back-upvrijgave
         shell: bash
         env:
-          TAG: ${{ steps.original.outputs.tag }}
+          BACKUP_VERIFIED: ${{ vars.RELEASE_BACKUP_VERIFIED }}
         run: |
           set -euo pipefail
-          gh release view "$TAG" --repo "$REPO" --json assets > "$RUNNER_TEMP/created.json"
-          jq -e '([.assets[].name] | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz")))' "$RUNNER_TEMP/created.json" >/dev/null
-          gh api --paginate "repos/$REPO/releases?per_page=100" | jq -s '[.[][] | select(.draft == false and .prerelease == false and (.tag_name | startswith("verified-v"))) | {tag:.tag_name, assets:[.assets[].name]} | select((.assets | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz"))))]' > "$RUNNER_TEMP/verified-unsorted.json"
-          jq -r '.[].tag' "$RUNNER_TEMP/verified-unsorted.json" | sed 's/^verified-v//' | sort -Vr | sed 's/^/verified-v/' > "$RUNNER_TEMP/ordered-tags.txt"
-          jq -Rn '[inputs]' < "$RUNNER_TEMP/ordered-tags.txt" > "$RUNNER_TEMP/verified.json"
-          COUNT=$(jq 'length' "$RUNNER_TEMP/verified.json")
-          echo "Geldige beheerde releases: $COUNT"
+          if [[ "$BACKUP_VERIFIED" != 'true' ]]; then
+            echo "Back-upveiligheidsslot actief. Geen releases verwijderd."
+            exit 0
+          fi
+          gh api --paginate "repos/$REPO/releases?per_page=100" | jq -s --arg ext 'apk' '
+            [.[][] |
+              select(.draft == false and .prerelease == false) |
+              select(.tag_name | test("^verified-v[0-9]+\\.[0-9]+\\.[0-9]+$")) |
+              select(
+                ([.assets[].name] | index("BUILD-MANIFEST.txt") != null) and
+                ([.assets[].name] | index("SHA256SUMS.txt") != null) and
+                ([.assets[].name] | any(.[]; endswith("." + $ext)))
+              ) |
+              .tag_name
+            ]
+          ' > "$RUNNER_TEMP/managed.json"
+          jq -r '.[]' "$RUNNER_TEMP/managed.json" |
+            sed 's/^verified-v//' | sort -Vr | sed 's/^/verified-v/' > "$RUNNER_TEMP/ordered-tags.txt"
+          COUNT=$(wc -l < "$RUNNER_TEMP/ordered-tags.txt")
           if (( COUNT > 3 )); then
-            jq -r '.[3:][]' "$RUNNER_TEMP/verified.json" | while IFS= read -r OLD; do
-              echo "Verwijderen van overtollige release: $OLD (Git-tag en geschiedenis blijven behouden)"
-              gh release delete "$OLD" --repo "$REPO" --yes
-            done
+            tail -n +4 "$RUNNER_TEMP/ordered-tags.txt" |
+              while IFS= read -r OLD; do
+                echo "Verwijder oude beheerde release: $OLD"
+                gh release delete "$OLD" --repo "$REPO" --yes
+              done
           fi
