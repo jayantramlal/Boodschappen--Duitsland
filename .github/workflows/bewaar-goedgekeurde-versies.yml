@@ -100,11 +100,13 @@ jobs:
           set -euo pipefail
           gh release view "$TAG" --repo "$REPO" --json assets > "$RUNNER_TEMP/created.json"
           jq -e '([.assets[].name] | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz")))' "$RUNNER_TEMP/created.json" >/dev/null
-          gh api --paginate "repos/$REPO/releases?per_page=100" | jq -s '[.[][] | select(.draft == false and .prerelease == false and (.tag_name | startswith("verified-v"))) | {tag:.tag_name, created:.created_at, assets:[.assets[].name]} | select((.assets | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz"))))] | sort_by(.created) | reverse' > "$RUNNER_TEMP/verified.json"
+          gh api --paginate "repos/$REPO/releases?per_page=100" | jq -s '[.[][] | select(.draft == false and .prerelease == false and (.tag_name | startswith("verified-v"))) | {tag:.tag_name, assets:[.assets[].name]} | select((.assets | index("BUILD-MANIFEST.txt") != null and index("SHA256SUMS.txt") != null and any(.[]; startswith("app-v") and endswith(".apk")) and any(.[]; startswith("source-v") and endswith(".tar.gz"))))]' > "$RUNNER_TEMP/verified-unsorted.json"
+          jq -r '.[].tag' "$RUNNER_TEMP/verified-unsorted.json" | sed 's/^verified-v//' | sort -Vr | sed 's/^/verified-v/' > "$RUNNER_TEMP/ordered-tags.txt"
+          jq -Rn '[inputs]' < "$RUNNER_TEMP/ordered-tags.txt" > "$RUNNER_TEMP/verified.json"
           COUNT=$(jq 'length' "$RUNNER_TEMP/verified.json")
           echo "Geldige beheerde releases: $COUNT"
           if (( COUNT > 3 )); then
-            jq -r '.[3:][].tag' "$RUNNER_TEMP/verified.json" | while IFS= read -r OLD; do
+            jq -r '.[3:][]' "$RUNNER_TEMP/verified.json" | while IFS= read -r OLD; do
               echo "Verwijderen van overtollige release: $OLD (Git-tag en geschiedenis blijven behouden)"
               gh release delete "$OLD" --repo "$REPO" --yes
             done
