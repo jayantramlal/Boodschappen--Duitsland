@@ -100,7 +100,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/download" release-files
-          gh run download "$BUILD_RUN_ID" --repo "$REPO" --dir "$RUNNER_TEMP/download"
+          # Actions-artifacts kunnen na tien dagen verlopen. De kandidaat-release
+          # houdt het exacte uitvoerbestand van de oorspronkelijke build beschikbaar.
+          if ! gh run download "$BUILD_RUN_ID" --repo "$REPO" --dir "$RUNNER_TEMP/download"; then
+            echo "Actions-artifact niet beschikbaar; probeer beveiligde kandidaat-release pending-run-$BUILD_RUN_ID."
+            gh release view "pending-run-$BUILD_RUN_ID" --repo "$REPO" --json targetCommitish,isPrerelease > "$RUNNER_TEMP/pending.json"
+            jq -e --arg sha "${{ steps.bronbuild.outputs.sha }}" '
+              .isPrerelease == true and .targetCommitish == $sha
+            ' "$RUNNER_TEMP/pending.json" >/dev/null
+            gh release download "pending-run-$BUILD_RUN_ID" --repo "$REPO" --dir "$RUNNER_TEMP/download"
+          fi
           mapfile -d '' BINARIES < <(find "$RUNNER_TEMP/download" -type f -iname '*.apk' -print0)
           if (( ${#BINARIES[@]} != 1 )); then
             echo "::error::Verwacht exact een .apk-bestand in deze run, gevonden: ${#BINARIES[@]}"
