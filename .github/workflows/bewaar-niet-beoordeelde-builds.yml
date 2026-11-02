@@ -1,0 +1,123 @@
+name: Bewaar niet-beoordeelde builds buiten artifact-verloop
+on:
+  workflow_run:
+    workflows:
+      - 'Bouw Boodschappen Duitsland APK'
+    types: [completed]
+  schedule:
+    - cron: '19 4 * * *'
+  push:
+    paths:
+      - '.github/workflows/bewaar-niet-beoordeelde-builds.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: kandidaat-releases-en-opruiming
+  cancel-in-progress: false
+
+jobs:
+  kandidaat:
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request' && github.event.workflow_run.head_branch == github.event.repository.default_branch && github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Maak voorlopig downloadarchief voor iedere succesvolle build
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="pending-run-$RUN_ID"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Build $RUN_ID is al beschermd tegen het artifact-verloop."
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/original" "$RUNNER_TEMP/staged"
+          gh run download "$RUN_ID" --repo "$REPO" --dir "$RUNNER_TEMP/original"
+          mapfile -d '' FILES < <(find "$RUNNER_TEMP/original" -type f -iname '*.apk' -print0)
+          if (( ${#FILES[@]} != 1 )); then
+            echo "::error::Verwacht precies een APK uit run $RUN_ID, gevonden: ${#FILES[@]}"
+            exit 1
+          fi
+          cp "${FILES[0]}" "$RUNNER_TEMP/staged/candidate-run-$RUN_ID.apk"
+          test -s "$RUNNER_TEMP/staged/candidate-run-$RUN_ID.apk"
+          gh release create "$TAG" "$RUNNER_TEMP/staged/candidate-run-$RUN_ID.apk" \
+            --repo "$REPO" --target "$SOURCE_SHA" --prerelease \
+            --title "Nog te beoordelen build $RUN_ID" \
+            --notes "Geen goedgekeurde release. Tijdelijke terugvalkopie van succesvolle GitHub-build $RUN_ID (broncommit $SOURCE_SHA). Bewaren tot beoordeling, ook na artifact-verloop. Niet als goedgekeurde app installeren zonder test."
+          echo "Build $RUN_ID is buiten de tijdelijke Actions-artifacts veiliggesteld."
+
+  opruimen:
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Verwijder alleen beoordeelde/oude kandidaatkopieën
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$REPO/releases?per_page=100" | jq -s '[.[][]]' > "$RUNNER_TEMP/all-releases.json"
+          jq -r '.[] | select(.draft == false and .prerelease == false) |
+            .tag_name | select(test("^verified-v[0-9]+\\.[0-9]+\\.[0-9]+$"))' "$RUNNER_TEMP/all-releases.json" |
+            sed 's/^verified-v//' | sort -Vr | sed 's/^/verified-v/' > "$RUNNER_TEMP/approved-tags"
+          LATEST=$(head -n 1 "$RUNNER_TEMP/approved-tags" || true)
+          if [[ -z "$LATEST" ]]; then
+            echo "Nog geen goedgekeurde release: kandidaten blijven bewaard."
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/latest"
+          gh release download "$LATEST" --repo "$REPO" --pattern 'BUILD-MANIFEST.txt' --dir "$RUNNER_TEMP/latest"
+          APPROVED_RUN=$(sed -n 's/^source_run_id=//p' "$RUNNER_TEMP/latest/BUILD-MANIFEST.txt" | head -n 1)
+          [[ "$APPROVED_RUN" =~ ^[0-9]+$ ]] || { echo "::error::Geen geldige goedgekeurde run-ID, opruimen afgebroken."; exit 1; }
+          APPROVED_AT=$(gh api "repos/$REPO/actions/runs/$APPROVED_RUN" --jq '.created_at')
+          [[ "$APPROVED_AT" =~ ^[0-9]{4}- ]] || { echo "::error::Geen geldige build-datum."; exit 1; }
+          APPROVED_EPOCH=$(date -u -d "$APPROVED_AT" +%s)
+          NOW=$(date -u +%s)
+          jq -r '.[] | select(.prerelease == true) | .tag_name | select(test("^pending-run-[0-9]+$"))' "$RUNNER_TEMP/all-releases.json" |
+            while IFS= read -r TAG; do
+              RUN_ID="${TAG#pending-run-}"
+              RUN_JSON=$(gh api "repos/$REPO/actions/runs/$RUN_ID" 2>/dev/null) || { echo "Onbekende run $RUN_ID: voor veiligheid behouden."; continue; }
+              CREATED=$(jq -r '.created_at // empty' <<< "$RUN_JSON")
+              [[ "$CREATED" =~ ^[0-9]{4}- ]] || continue
+              EPOCH=$(date -u -d "$CREATED" +%s)
+              if (( EPOCH <= APPROVED_EPOCH && NOW - EPOCH >= 864000 )); then
+                echo "Verwijder oude kandidaat $TAG (niet nieuwer dan goedgekeurde build)."
+                gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag
+              else
+                echo "Behoud kandidaat $TAG: nieuwer dan basis of jonger dan tien dagen."
+              fi
+            done
+          echo 'Goedgekeurde releases zijn nooit geselecteerd voor deze opruimactie.'
+
+  test:
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Test de tien-dagen-grens en bescherm nieuwere kandidaten
+        shell: bash
+        run: |
+          set -euo pipefail
+          approved=2000000
+          now=4000000
+          older=2000000
+          newer=3000000
+          recent=3800000
+          keep() {
+            local created="$1"
+            if (( created <= approved && now - created >= 864000 )); then echo delete; else echo keep; fi
+          }
+          [[ "$(keep "$older")" == "delete" ]]
+          [[ "$(keep "$newer")" == "keep" ]]
+          [[ "$(keep "$recent")" == "keep" ]]
+          echo 'TEST GESLAAGD: alleen oudere kandidaten na 10 dagen weg; nieuwere blijven.'
