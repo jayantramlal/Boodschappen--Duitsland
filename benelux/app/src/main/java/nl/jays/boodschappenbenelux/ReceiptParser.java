@@ -47,6 +47,7 @@ final class ReceiptParser {
         for(String s:raw.split("\\r?\\n")){
             String line=s.trim().replaceAll("\\s+"," ");if(line.isEmpty())continue;
             String lower=line.toLowerCase(Locale.ROOT);
+            if(lower.contains("ersparnis")||lower.contains("sie sparen"))continue;
             Matcher amount=MONEY.matcher(line);
             boolean has=amount.find();
             if(lower.matches("^(?:gesamt(?:betrag)?|gesamtsumme|summe|total|totaal|te betalen|zu zahlen|endbetrag|betrag eur)\\b.*")&&!lower.contains("erspar")){
@@ -54,7 +55,7 @@ final class ReceiptParser {
                 pending="";previous=null;continue;
             }
             // Tax/payment/account numbers must never be offered as groceries.
-            if(lower.matches("^(?:zwischen\\s*summe|subtotal|subtotaal|netto|brutto|mwst|ust|steuer|btw|bar(?:zahlung)?|gegeben|rückgeld|ruckgeld|wechselgeld|ec[- ]|kartenzahlung|visa|mastercard|girocard|pin\\b|zahlung|bezahlt|betaling|cash|saldo|ersparnis|sie sparen|datum|uhrzeit|kasse|kassa|bon[- ]?nr|beleg|transaktion|tel[.: ]|www\\.|https?://|\\d{5}\\s+).*")){
+            if(lower.matches("^(?:zwischen\\s*summe|subtotal|subtotaal|netto|brutto|mwst|ust|steuer|btw|bar(?:zahlung)?|gegeben|rückgeld|ruckgeld|wechselgeld|ec[- ]|kartenzahlung|visa|mastercard|girocard|pin\\b|zahlung|bezahlt|gezahlt|debit|karte|betaling|cash|saldo|ersparnis|sie sparen|datum|uhrzeit|kasse|kassa|bon[- ]?nr|beleg|transaktion|tel[.: ]|www\\.|https?://|\\d{5}\\s+).*")){
                 pending="";continue;
             }
             if(lower.matches("^[a-d]?\\s*(?:7|19|9|21)[,.]\\d{2}\\s*%.*"))continue;
@@ -79,7 +80,7 @@ final class ReceiptParser {
             if(label.isEmpty()&&!pending.isEmpty()){label=pending;pending="";}
             if(label.length()<2||!label.matches(".*[\\p{L}].*"))continue;
             boolean deposit=lower.contains("pfand")||lower.contains("statiegeld")||lower.contains("leergut");
-            boolean discount=lower.matches(".*(rabatt|rab\.|korting|coupon|gutschein|preisvorteil|aktionsvorteil|nachlass|lidl plus).* ")||lower.matches(".*(rabatt|korting|coupon|gutschein|nachlass|preisvorteil|aktionsvorteil).*?");
+            boolean discount=lower.matches(".*(rabatt|korting|coupon|gutschein|preisvorteil|aktionsvorteil|nachlass|lidl plus).*?");
             if(discount&&cents<0&&!deposit&&previous!=null&&!lower.matches(".*(coupon|gutschein|gesamt|einkauf).*")){
                 if((long)previous.discountCents-cents<=Math.max(0,previous.cents)){previous.discountCents-=cents;pending="";continue;}
             }
@@ -101,6 +102,12 @@ final class ReceiptParser {
                 if(pending.endsWith("-"))item.label=pending.substring(0,pending.length()-1)+item.label;
             }
             pending="";
+            if(item.quantity.equals("1")&&item.type.equals(PRODUCT)){
+                Matcher prefix=Pattern.compile("^(\\d{1,2})\\s+(?!g\\b|kg\\b|ml\\b|l\\b)([\\p{L}].*)",Pattern.CASE_INSENSITIVE).matcher(item.label);
+                if(prefix.matches()&&Integer.parseInt(prefix.group(1))>1){
+                    item.quantity=prefix.group(1);item.label=prefix.group(2);item.unitCents=BigDecimal.valueOf(item.cents).divide(new BigDecimal(item.quantity),0,RoundingMode.HALF_UP).intValue();item.flag("Aantal afgeleid: controleren");
+                }
+            }
             if(item.label.matches(".*[?~�].*")||item.label.length()<3)item.flag("Naam controleren");
             if(item.cents==0)item.flag("Prijs controleren");
             d.lines.add(item);previous=item;

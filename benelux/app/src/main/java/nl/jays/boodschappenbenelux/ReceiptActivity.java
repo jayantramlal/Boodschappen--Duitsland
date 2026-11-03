@@ -139,7 +139,7 @@ public class ReceiptActivity extends Activity {
             catch(Exception e){invalid.add(l.id);net.setText("Controleer aantal, prijs en korting");}
         };
         changed(quantity,amounts);changed(unit,amounts);changed(discount,amounts);
-        if(l.uncertain){TextView check=text("◦ "+l.reason,13,colors.muted);check.setPadding(dp(4),dp(8),dp(4),dp(8));row.addView(check);if(!readOnly)check.setOnClickListener(v->{l.uncertain=false;persist();check.setVisibility(View.GONE);});}
+        if(l.uncertain){TextView check=text("◦ "+l.reason,13,colors.muted);check.setPadding(dp(4),dp(8),dp(4),dp(8));row.addView(check);if(!readOnly)check.setOnClickListener(v->{l.uncertain=false;l.edited=true;persist();check.setVisibility(View.GONE);});}
         if(!readOnly){TextView link=text(l.barcode.isEmpty()?"Product koppelen (optioneel)":"Gekoppeld: "+l.barcode,13,colors.accent);link.setMinHeight(dp(48));link.setGravity(Gravity.CENTER_VERTICAL);link.setPadding(dp(4),0,0,0);row.addView(link);link.setOnClickListener(v->linkProduct(l));}
     }
     private String typeLabel(String t){return t.equals(ReceiptParser.DEPOSIT)?"Statiegeld / Pfand":t.equals(ReceiptParser.DISCOUNT)?"Korting":t.equals(ReceiptParser.RETURN)?"Retour":"Product";}
@@ -245,7 +245,7 @@ public class ReceiptActivity extends Activity {
             if(!invalid.isEmpty())throw new IllegalArgumentException("Controleer de invoer");
             saveButton.setEnabled(false);if(!persist())return;
             files.archive(draft);String fingerprint=draft.raw.trim().isEmpty()?"manual:"+draft.id:ReceiptFiles.fingerprint(draft.raw);
-            boolean saved=db.savePurchase(draft,fingerprint);if(saved||db.hasPurchase(draft.id))files.clear();else files.discard(draft);toast(saved?"Aankoop opgeslagen":"Deze bon is al opgeslagen; niets dubbel geboekt");finish();
+            boolean saved=db.savePurchase(draft,fingerprint);if(saved||db.hasPurchase(draft.id))files.clear();else files.discard(draft);readOnly=true;toast(saved?"Aankoop opgeslagen":"Deze bon is al opgeslagen; niets dubbel geboekt");finish();
         }catch(Exception e){toast(e.getMessage()==null?"Opslaan mislukt; je concept blijft bewaard":e.getMessage());if(saveButton!=null)saveButton.setEnabled(true);}
     }
     private void viewPage(int index){

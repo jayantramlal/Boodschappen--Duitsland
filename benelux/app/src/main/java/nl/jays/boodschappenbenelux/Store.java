@@ -75,17 +75,22 @@ final class Store extends SQLiteOpenHelper {
             }
             ContentValues p=new ContentValues();p.put("id",draft.id);p.put("fingerprint",fingerprint);p.put("store",draft.shop.trim());p.put("bought",ReceiptParser.dateMillis(draft.date));
             Integer receiptTotal=ReceiptParser.money(draft.totalText);if(receiptTotal!=null)p.put("total_cents",receiptTotal);p.put("calculated_cents",draft.total());p.put("created",System.currentTimeMillis());d.insertOrThrow("purchases",null,p);
+            Map<String,java.math.BigDecimal> quantities=new LinkedHashMap<>();Map<String,Long> amounts=new LinkedHashMap<>();
             for(ReceiptParser.Line l:draft.lines){
                 String barcode=l.barcode.trim();
-                if(l.type.equals(ReceiptParser.PRODUCT)&&barcode.isEmpty())barcode="receipt:"+draft.id+":"+l.id;
+                if(l.type.equals(ReceiptParser.PRODUCT)&&barcode.isEmpty())barcode="receipt:"+draft.id+":"+UUID.nameUUIDFromBytes(ReceiptParser.normalized(l.label).getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 ContentValues v=new ContentValues();v.put("receipt_id",draft.id);v.put("line_id",l.id);v.put("label",l.label.trim());v.put("quantity",l.quantity);v.put("unit_cents",l.unitCents);v.put("line_cents",l.cents);v.put("discount_cents",l.discountCents);v.put("type",l.type);v.put("barcode",barcode);d.insertOrThrow("receipt_items",null,v);
                 if(l.type.equals(ReceiptParser.PRODUCT)){
                     ContentValues product=new ContentValues();product.put("barcode",barcode);product.put("name",l.label.trim());product.put("size","");product.put("image_url","");
                     // Never replace an existing product's name, size, image, or shopping list relation.
                     d.insertWithOnConflict("products",null,product,SQLiteDatabase.CONFLICT_IGNORE);
-                    int unitNet=java.math.BigDecimal.valueOf(l.net()).divide(new java.math.BigDecimal(l.quantity),0,java.math.RoundingMode.HALF_UP).intValueExact();
-                    ContentValues price=new ContentValues();price.put("barcode",barcode);price.put("store",draft.shop.trim());price.put("cents",unitNet);price.put("source","BON");price.put("observed",ReceiptParser.dateMillis(draft.date));price.put("purchase_id",draft.id);d.insertOrThrow("prices",null,price);
+                    quantities.put(barcode,quantities.getOrDefault(barcode,java.math.BigDecimal.ZERO).add(new java.math.BigDecimal(l.quantity)));
+                    amounts.put(barcode,amounts.getOrDefault(barcode,0L)+l.net());
                 }
+            }
+            for(String barcode:quantities.keySet()){
+                int unitNet=java.math.BigDecimal.valueOf(amounts.get(barcode)).divide(quantities.get(barcode),0,java.math.RoundingMode.HALF_UP).intValueExact();
+                ContentValues price=new ContentValues();price.put("barcode",barcode);price.put("store",draft.shop.trim());price.put("cents",unitNet);price.put("source","BON");price.put("observed",ReceiptParser.dateMillis(draft.date));price.put("purchase_id",draft.id);d.insertOrThrow("prices",null,price);
             }
             d.setTransactionSuccessful();return true;
         }finally{d.endTransaction();}

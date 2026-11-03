@@ -22,4 +22,7 @@ public class ReceiptParserTest {
  @Test public void changingAmountsUsesExactCents(){ReceiptParser.Line l=new ReceiptParser.Line("Melk",119);l.setQuantityAndUnit("3",119);l.discountCents=10;assertEquals(347,l.net());}
  @Test public void manyPartsRemainOrdered(){ArrayList<String> pages=new ArrayList<>();for(int n=0;n<20;n++)pages.add("Product"+n+" 1,00");assertEquals(20,ReceiptParser.parse(ReceiptParser.mergePages(pages)).size());}
  @Test public void taxLinesAreIgnored(){assertEquals(1,ReceiptParser.parse("BROT 2,00\nMwSt 0,13\nA 7,00% 0,13\nB 19,00% 0,00\nNETTO 1,87").size());}
+ @Test public void leadingQuantityIsProposedWithWarning(){ReceiptParser.Line l=ReceiptParser.parse("2 COLA 2,98").get(0);assertEquals("2",l.quantity);assertEquals(149,l.unitCents);assertTrue(l.uncertain);}
+ @Test public void packSizeIsNotQuantity(){ReceiptParser.Line l=ReceiptParser.parse("500 g GOUDA 2,99").get(0);assertEquals("1",l.quantity);}
+
 }
