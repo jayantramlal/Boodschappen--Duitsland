@@ -30,8 +30,6 @@ public class MainActivity extends Activity {
     private String currentKey="";
     private boolean restoring;
     private long lastBack;
-    private final int CAMERA_REQUEST=42, GALLERY_REQUEST=43;
-    private final Set<Integer> savedReceiptLines=new HashSet<>();
     private String currentBarcode;
     @Override public void onCreate(Bundle b){
         dark=getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("dark",false);
@@ -242,75 +240,23 @@ public class MainActivity extends Activity {
         button("Bewaar als handmatig geobserveerde prijs",()->{String s=shop.getText().toString().trim();Integer c=parseCents(amount.getText().toString());if(s.isEmpty()||c==null){toast("Controleer winkel en prijs");return;}db.recordPrice(code,s,c,"HANDMATIG",null,null);product(code);});
         button("Actie vastleggen",()->{String s=shop.getText().toString().trim();Integer c=parseCents(amount.getText().toString());if(s.isEmpty()||c==null){toast("Controleer winkel en actieprijs");return;}actionForm(code,s,c);});}
     private void actionForm(String code,String shop,int cents){screen("action:"+code,"Actie controleren",()->actionForm(code,shop,cents));note(shop+" — "+euro(cents));EditText original=input("Normale prijs (€), optioneel","");EditText days=input("Nog geldig (aantal dagen)","7");button("Actie bewaren",()->{try{int d=Integer.parseInt(days.getText().toString().trim());Integer regular=original.getText().toString().trim().isEmpty()?null:parseCents(original.getText().toString());if(d<1||d>365||(!original.getText().toString().trim().isEmpty()&&regular==null)){toast("Controleer prijs en geldigheid");return;}db.recordPrice(code,shop,cents,"ACTIE",System.currentTimeMillis()+86400000L*d,regular);product(code);}catch(Exception e){toast("Vul een geldig aantal dagen in");}});}
-    private void receipt(){screen("bonnen","Bonnen",this::receipt);note("Voeg een bon toe om betaalde prijzen te bewaren.");section("Bon toevoegen");button("Foto van bon maken",()->{try{Intent i=new Intent("android.media.action.IMAGE_CAPTURE");startActivityForResult(i,CAMERA_REQUEST);}catch(Exception e){toast("Geen camera-app beschikbaar");}});secondary("Foto kiezen",()->{Intent i=new Intent(Intent.ACTION_GET_CONTENT);i.setType("image/*");startActivityForResult(i,GALLERY_REQUEST);});cardRow("+","Prijs handmatig toevoegen","Zonder bonfoto",this::manualReceipt);}
+    private void receipt(){
+        screen("bonnen","Bonnen",this::receipt);
+        File active=new File(getFilesDir(),"receipts/draft.json");
+        if(active.exists()||new File(getFilesDir(),"receipts/draft.json.bak").exists())
+            cardRow("☷","Bon verder controleren","Je concept is bewaard",()->startActivity(new Intent(this,ReceiptActivity.class)));
+        button("Bon scannen",()->startActivity(new Intent(this,ReceiptActivity.class).putExtra("capture",true)));
+        secondary("Foto kiezen",()->startActivity(new Intent(this,ReceiptActivity.class).putExtra("gallery",true)));
+        cardRow("+","Prijs handmatig toevoegen","Zonder bonfoto",this::manualReceipt);
+        section("Opgeslagen bonnen");
+        try(Cursor c=db.purchases()){while(c.moveToNext()){
+            String id=c.getString(0),shop=c.getString(1);long bought=c.getLong(2),sum=c.getLong(3);
+            cardRow("▤",shop,date(bought)+" · "+String.format(Locale.GERMANY,"€ %.2f",sum/100.0),
+                ()->startActivity(new Intent(this,ReceiptActivity.class).putExtra("purchaseId",id)));
+        }}
+    }
+    @Override protected void onResume(){super.onResume();if("bonnen".equals(currentKey)&&db!=null)receipt();}
     private void manualReceipt(){screen("manualReceipt","Bonprijs toevoegen",this::manualReceipt);EditText barcode=input("Barcode van gekocht product","");EditText shop=input("Winkel","");EditText name=input("Productnaam als nieuw product","");EditText amount=input("Prijs (€)","");button("Controleer en bewaar",()->{String b=barcode.getText().toString().trim(),s=shop.getText().toString().trim();Integer cents=parseCents(amount.getText().toString());if(b.isEmpty()||s.isEmpty()||cents==null){toast("Barcode, winkel en prijs zijn verplicht");return;}if(db.productName(b)==null){String n=name.getText().toString().trim();if(n.isEmpty()){toast("Vul ook de productnaam in");return;}db.product(b,n,"");}db.recordPrice(b,s,cents,"BON",null,null);product(b);});}
-    @Override protected void onActivityResult(int req,int result,Intent data){
-        super.onActivityResult(req,result,data);
-        if((req!=CAMERA_REQUEST&&req!=GALLERY_REQUEST)||result!=RESULT_OK||data==null)return;
-        try {
-            InputImage image;
-            if(req==GALLERY_REQUEST&&data.getData()!=null)image=InputImage.fromFilePath(this,data.getData());
-            else {
-                Object obj=data.getExtras()==null?null:data.getExtras().get("data");
-                if(!(obj instanceof Bitmap)){toast("Camera leverde geen bruikbare foto. Kies een volledige bonfoto.");return;}
-                image=InputImage.fromBitmap((Bitmap)obj,0);
-            }
-            screen("receiptLoading","Bon lezen",this::receipt);note("Tekstherkenning bezig…");
-            TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS).process(image)
-                .addOnSuccessListener(txt->{savedReceiptLines.clear();receiptReview(txt.getText());})
-                .addOnFailureListener(e->toast("Bonherkenning mislukt. Voeg de prijs handmatig toe."));
-        }catch(Exception e){toast("Bonfoto kon niet worden geopend.");}
-    }
-    private void receiptReview(String raw){
-        screen("receiptReview","Bon controleren",()->receiptReview(raw));
-        String suggestedShop=ReceiptParser.shop(raw);
-        note("Controleer elke regel en koppel die aan een barcode. De bonprijs wordt pas opgeslagen na jouw bevestiging.");
-        java.util.List<ReceiptParser.Line> lines=ReceiptParser.parse(raw);
-        if(lines.isEmpty())note("Geen afzonderlijke productregels gevonden. Je kunt de tekst hieronder gebruiken voor handmatige invoer.");
-        for(int i=0;i<lines.size();i++){
-            if(savedReceiptLines.contains(i))continue;
-            final int index=i;ReceiptParser.Line line=lines.get(i);
-            line(line.label+"  "+euro(line.cents),()->receiptLine(raw,index,suggestedShop));
-        }
-        button("Bonprijs handmatig toevoegen",this::manualReceipt);
-        note("Herkende bontekst:");body.addView(text(raw.isEmpty()?"Geen tekst herkend":raw,13,white));
-    }
-    private void receiptLine(String raw,int index,String suggestedShop){
-        java.util.List<ReceiptParser.Line> lines=ReceiptParser.parse(raw);
-        if(index<0||index>=lines.size())return;
-        ReceiptParser.Line item=lines.get(index);
-        screen("receiptLine:"+index,"Bonregel koppelen",()->receiptLine(raw,index,suggestedShop));
-        EditText name=input("Productnaam",item.label);
-        EditText barcode=input("Barcode van exact dit product","");
-        EditText shop=input("Winkel",suggestedShop);
-        EditText amount=input("Betaalde prijs (€)",String.format(Locale.GERMANY,"%.2f",item.cents/100.0));
-        EditText purchased=input("Aankoopdatum (dd-mm-jjjj)",ReceiptParser.date(raw));
-        note("Selecteer een bekend product hieronder of voer de barcode in. Controleer ook verpakking en prijs.");
-        String term=item.label.split(" ")[0];
-        if(term.length()>=3)try(Cursor c=db.findProducts(term)){
-            while(c.moveToNext()){String foundCode=c.getString(0),foundName=c.getString(1);
-                line(foundName+" · "+foundCode,()->{barcode.setText(foundCode);name.setText(foundName);});
-            }
-        }
-        button("Gekoppelde bonprijs bewaren",()->{
-            String b=barcode.getText().toString().trim(),n=name.getText().toString().trim(),sh=shop.getText().toString().trim();
-            Integer cents=parseCents(amount.getText().toString());
-            if(b.isEmpty()||n.isEmpty()||sh.isEmpty()||cents==null){toast("Controleer barcode, product, winkel en prijs");return;}
-            String old=db.productName(b);
-            if(old==null)db.product(b,n,"");
-            else if(!old.equals(n)){toast("Barcode hoort bij "+old+". Kies het juiste product.");return;}
-            Long bought=parseReceiptDate(purchased.getText().toString());if(bought==null){toast("Controleer de aankoopdatum");return;}db.recordPriceAt(b,sh,cents,"BON",null,null,bought);savedReceiptLines.add(index);receiptReview(raw);
-        });
-        button("Deze regel overslaan",()->{savedReceiptLines.add(index);receiptReview(raw);});
-    }
-    private Long parseReceiptDate(String value){
-        try{
-            SimpleDateFormat fmt=new SimpleDateFormat("dd-MM-yyyy",Locale.getDefault());
-            fmt.setLenient(false);Date d=fmt.parse(value.trim());
-            if(d==null||d.getTime()>System.currentTimeMillis()+86400000L)return null;
-            return d.getTime();
-        }catch(Exception e){return null;}
-    }
     private void settings(){
         screen("settings","Instellingen",this::settings);
         note("Weergave");
@@ -343,3 +289,4 @@ public class MainActivity extends Activity {
         }else home();
     }
 }
+

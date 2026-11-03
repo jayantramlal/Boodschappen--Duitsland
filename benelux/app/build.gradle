@@ -9,8 +9,8 @@ android {
         applicationId 'nl.jays.boodschappenbenelux'
         minSdk 23
         targetSdk 35
-        versionCode 8
-        versionName '1.0.7'
+        versionCode 9
+        versionName '1.0.8'
     }
     signingConfigs {
         release {
@@ -20,6 +20,7 @@ android {
             keyPassword signing.getProperty('RELEASE_KEY_PASSWORD', '')
         }
     }
+    testOptions { unitTests.includeAndroidResources = true }
     buildTypes {
         release {
             minifyEnabled false
@@ -28,6 +29,14 @@ android {
     }
 }
 dependencies {
+    implementation 'com.google.android.gms:play-services-mlkit-document-scanner:16.0.0'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.exifinterface:exifinterface:1.3.7'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+    testImplementation 'androidx.test:core:1.6.1'
+
     implementation 'com.google.android.gms:play-services-code-scanner:16.1.0'
     implementation 'com.google.mlkit:text-recognition:16.0.1'
 }
+
