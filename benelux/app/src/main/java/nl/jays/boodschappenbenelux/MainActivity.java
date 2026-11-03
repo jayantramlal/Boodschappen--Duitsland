@@ -23,7 +23,7 @@ public class MainActivity extends Activity {
     private final String[] shops={"Albert Heijn","Jumbo","Dirk","Lidl Nederland","PLUS","Kruidvat","REWE","EDEKA Schroff","Lidl Duitsland","ALDI SÜD","Kaufland","dm"};
     private Store db;
     private LinearLayout root,body;
-    private int canvas,card,ink,muted,accent,soft,border,white=Color.WHITE;
+    private int canvas,card,ink,muted,accent,soft,border,buttonColor,trackColor,white=Color.WHITE;
     private boolean dark;
     private final ArrayDeque<Runnable> history=new ArrayDeque<>();
     private Runnable currentScreen;
@@ -34,18 +34,16 @@ public class MainActivity extends Activity {
     private final Set<Integer> savedReceiptLines=new HashSet<>();
     private String currentBarcode;
     @Override public void onCreate(Bundle b){
-        super.onCreate(b);db=new Store(this);
         dark=getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("dark",false);
+        setTheme(dark ? R.style.BeneluxDarkTheme : R.style.BeneluxTheme);
+        super.onCreate(b);db=new Store(this);
         palette();home();
     }
     private void palette(){
-        canvas=Color.rgb(dark?15:250,dark?23:249,dark?20:244);
-        card=Color.rgb(dark?28:255,dark?39:255,dark?35:253);
-        ink=Color.rgb(dark?239:27,dark?246:41,dark?236:37);
-        muted=Color.rgb(dark?170:101,dark?187:110,dark?175:104);
-        accent=Color.rgb(dark?39:21,dark?126:91,dark?75:63);
-        soft=Color.rgb(dark?34:232,dark?65:242,dark?53:231);
-        border=Color.rgb(dark?54:224,dark?72:229,dark?61:222);
+        AppPalette colors=AppPalette.forDarkMode(dark);
+        canvas=colors.canvas; card=colors.card; ink=colors.ink; muted=colors.muted;
+        accent=colors.accent; soft=colors.soft; border=colors.border;
+        buttonColor=colors.button; trackColor=colors.track;
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
         getWindow().getDecorView().setSystemUiVisibility(0);
@@ -58,7 +56,7 @@ public class MainActivity extends Activity {
     }
     private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density);}
     private TextView text(String s,int size,int color){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);t.setPadding(dp(16),dp(12),dp(16),dp(12));return t;}
-    private GradientDrawable shape(int fill,int radius){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(radius));return d;}
+    private GradientDrawable shape(int fill,int radius){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(radius));if(fill==card)d.setStroke(dp(1),border);return d;}
     private void layout(String title){
         root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(canvas);setContentView(root);
         LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
@@ -105,7 +103,7 @@ public class MainActivity extends Activity {
     }
     private void line(String s,Runnable action){TextView t=text(s,16,ink);t.setBackground(shape(card,16));
         LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=dp(10);body.addView(t,p);if(action!=null)t.setOnClickListener(v->action.run());}
-    private void button(String s,Runnable r){TextView t=text(s,16,white);t.setTypeface(null,1);t.setGravity(Gravity.CENTER);t.setBackground(shape(accent,16));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(54));p.bottomMargin=dp(12);body.addView(t,p);t.setOnClickListener(v->r.run());}
+    private void button(String s,Runnable r){TextView t=text(s,16,white);t.setTypeface(null,1);t.setGravity(Gravity.CENTER);t.setBackground(shape(buttonColor,16));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(54));p.bottomMargin=dp(12);body.addView(t,p);t.setOnClickListener(v->r.run());}
     private void secondary(String s,Runnable r){TextView t=text(s,15,accent);t.setGravity(Gravity.CENTER);t.setBackground(shape(soft,15));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));p.bottomMargin=dp(10);body.addView(t,p);t.setOnClickListener(v->r.run());}
     private void note(String s){body.addView(text(s,14,muted));}
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
@@ -318,11 +316,17 @@ public class MainActivity extends Activity {
         note("Weergave");
         Switch toggle=new Switch(this);toggle.setText("Donkere modus");toggle.setTextSize(17);toggle.setTextColor(ink);
         toggle.setPadding(dp(16),dp(12),dp(16),dp(12));toggle.setChecked(dark);
+        int[][] switchStates={new int[]{android.R.attr.state_checked},new int[]{}};
+        toggle.setThumbTintList(new android.content.res.ColorStateList(switchStates,new int[]{accent,muted}));
+        toggle.setTrackTintList(new android.content.res.ColorStateList(switchStates,new int[]{trackColor,border}));
+        toggle.setBackground(shape(card,16));
         body.addView(toggle,new LinearLayout.LayoutParams(-1,dp(62)));
         toggle.setOnCheckedChangeListener((view,checked)->{
             dark=checked;getSharedPreferences("appearance",MODE_PRIVATE).edit().putBoolean("dark",checked).apply();
+            setTheme(checked ? R.style.BeneluxDarkTheme : R.style.BeneluxTheme);
             palette();settings();
         });
+        note(dark ? "Thema 4 · Donker & Rustig" : "Thema 3 · Natuurlijk Groen");
         note("Je keuze blijft bewaard na het sluiten van de app.");
         secondary("Terug",this::onBackPressed);
     }

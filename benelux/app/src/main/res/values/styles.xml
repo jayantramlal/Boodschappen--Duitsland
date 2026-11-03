@@ -1,9 +1,32 @@
 <resources>
-    <style name="BeneluxTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="BaseBeneluxTheme" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:statusBarColor">#000000</item>
         <item name="android:navigationBarColor">#000000</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#FBF9F3</item>
+        <item name="android:colorBackground">#FBF9F3</item>
+        <item name="android:colorAccent">#3E6B3F</item>
+        <item name="android:textColorPrimary">#1E3023</item>
+        <item name="android:textColorSecondary">#59634F</item>
+        <item name="android:colorControlNormal">#59634F</item>
+        <item name="android:colorControlActivated">#3E6B3F</item>
     </style>
+    <style name="BaseBeneluxDarkTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#0F1420</item>
+        <item name="android:colorBackground">#0F1420</item>
+        <item name="android:colorAccent">#91D6B1</item>
+        <item name="android:textColorPrimary">#F3F4F6</item>
+        <item name="android:textColorSecondary">#D9C9B2</item>
+        <item name="android:colorControlNormal">#D9C9B2</item>
+        <item name="android:colorControlActivated">#91D6B1</item>
+    </style>
+    <style name="BeneluxTheme" parent="BaseBeneluxTheme" />
+    <style name="BeneluxDarkTheme" parent="BaseBeneluxDarkTheme" />
 </resources>
