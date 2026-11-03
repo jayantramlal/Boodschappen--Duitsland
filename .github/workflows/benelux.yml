@@ -39,6 +39,7 @@ jobs:
           path: |
             benelux/app/build/outputs/apk/release/app-release.apk
             benelux/app/build/test-results/testDebugUnitTest/*.xml
+            benelux/app/build/receipt-qa/*.png
           if-no-files-found: error
           retention-days: 10
 

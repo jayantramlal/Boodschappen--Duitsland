@@ -32,7 +32,7 @@ public class ReceiptActivity extends Activity {
     private ReceiptFiles files;private Store db;private ReceiptDraft draft;
     private AppPalette colors;private LinearLayout root,body,footer;
     private TextView totals,warning;private Button saveButton;private CheckBox mismatch;
-    private boolean busy,readOnly,initializing,acknowledged,draftFailed,scannerOpening;
+    private boolean busy,readOnly,initializing,acknowledged,draftFailed,scannerOpening,keyboardVisible;
     private final HashMap<String,TextView> rowTotals=new HashMap<>();
     private final HashSet<String> invalid=new HashSet<>();
     @Override public void onCreate(Bundle state){
@@ -88,17 +88,17 @@ public class ReceiptActivity extends Activity {
         TextView title=text(readOnly?"Kassabon":"Bon controleren",21,colors.ink);title.setTypeface(null,1);header.addView(title,new LinearLayout.LayoutParams(0,-2,1));root.addView(header);
         ScrollView sc=new ScrollView(this);sc.setFillViewport(true);body=new LinearLayout(this);body.setOrientation(1);body.setPadding(dp(12),0,dp(12),dp(20));sc.addView(body);root.addView(sc,new LinearLayout.LayoutParams(-1,0,1));
         if(busy){ProgressBar progress=new ProgressBar(this);body.addView(progress);note("Bon lezen… Je concept blijft bewaard.");}
-        EditText shop=field(body,"Winkel",draft.shop,false);shop.setTag("receiptShop");changed(shop,()->{draft.shop=shop.getText().toString();draft.metadataEdited=true;});
-        EditText date=field(body,"Aankoopdatum (dd-mm-jjjj)",draft.date,false);date.setTag("receiptDate");changed(date,()->{draft.date=date.getText().toString();draft.metadataEdited=true;});
+        LinearLayout metadata=new LinearLayout(this);metadata.setOrientation(0);body.addView(metadata);
+        EditText shop=field(metadata,"Winkel",draft.shop,false);shop.setTag("receiptShop");changed(shop,()->{draft.shop=shop.getText().toString();draft.metadataEdited=true;});
+        EditText date=field(metadata,"Datum (dd-mm-jjjj)",draft.date,false);date.setTag("receiptDate");changed(date,()->{draft.date=date.getText().toString();draft.metadataEdited=true;});
         if(!draft.error.isEmpty())note(draft.error);
         if(!readOnly){
-            if(!draft.pages.isEmpty())addButton("Bon bekijken · "+draft.pages.size()+" foto’s",()->viewPage(0));
             if(!busy){
                 LinearLayout capture=new LinearLayout(this);capture.setPadding(0,dp(8),0,dp(8));
-                Button more=button(draft.pages.isEmpty()?"Bon scannen":"Volgend bondeel",this::openScanner,false);capture.addView(more,new LinearLayout.LayoutParams(0,-2,1));
-                Button gallery=button("Foto kiezen",this::gallery,false);LinearLayout.LayoutParams gp=new LinearLayout.LayoutParams(0,-2,1);gp.leftMargin=dp(6);capture.addView(gallery,gp);body.addView(capture);
-                addButton("Handmatig fotograferen",this::manualPhoto);
-            }
+                Button first=button(draft.pages.isEmpty()?"Bon scannen":"Bon · "+draft.pages.size()+" foto’s",draft.pages.isEmpty()?this::openScanner:()->viewPage(0),false);capture.addView(first,new LinearLayout.LayoutParams(0,-2,1));
+                Button more=button(draft.pages.isEmpty()?"Foto kiezen":"+ Bondeel",draft.pages.isEmpty()?this::gallery:this::openScanner,false);LinearLayout.LayoutParams gp=new LinearLayout.LayoutParams(0,-2,1);gp.leftMargin=dp(6);capture.addView(more,gp);
+                Button menu=button("⋯",()->{},false);menu.setContentDescription("Meer foto-opties");capture.addView(menu,new LinearLayout.LayoutParams(dp(48),-2));menu.setOnClickListener(v->{PopupMenu popup=new PopupMenu(this,menu);popup.getMenu().add("Handmatig fotograferen");popup.getMenu().add("Foto kiezen");popup.setOnMenuItemClickListener(item->{if(item.getTitle().toString().startsWith("Handmatig"))manualPhoto();else gallery();return true;});popup.show();});body.addView(capture);
+            }else if(!draft.pages.isEmpty())note(draft.pages.size()+" bonfoto’s");
         }else if(!draft.pages.isEmpty())addButton("Originele bon bekijken",()->viewPage(0));
         if(!readOnly&&!busy&&hasPendingWork()){
             addButton("Opnieuw lezen",this::process);
@@ -113,13 +113,18 @@ public class ReceiptActivity extends Activity {
         if(!readOnly&&!draft.raw.isEmpty())addButton("Herkende tekst",()->new AlertDialog.Builder(this).setTitle("Bontekst").setMessage(draft.raw).setPositiveButton("Sluiten",null).show());
         if(!readOnly&&!busy)addButton("Concept verwijderen",()->new AlertDialog.Builder(this).setTitle("Concept verwijderen?").setMessage("De nog niet opgeslagen regels worden verwijderd.").setNegativeButton("Behouden",null).setPositiveButton("Verwijderen",(x,w)->{files.discard(draft);finish();}).show());
         footer=new LinearLayout(this);footer.setOrientation(1);footer.setPadding(dp(14),dp(6),dp(14),dp(8));footer.setBackgroundColor(colors.card);
-        EditText receiptTotal=field(footer,"Totaal op kassabon (€)",draft.totalText,true);receiptTotal.setTag("receiptTotal");changed(receiptTotal,()->{draft.totalText=receiptTotal.getText().toString();draft.metadataEdited=true;});
+        EditText receiptTotal=field(body,"Totaal op kassabon (€)",draft.totalText,true);receiptTotal.setTag("receiptTotal");changed(receiptTotal,()->{draft.totalText=receiptTotal.getText().toString();draft.metadataEdited=true;});
         totals=text("",16,colors.ink);totals.setTypeface(null,1);footer.addView(totals);
         warning=text("",13,colors.muted);footer.addView(warning);
         mismatch=new CheckBox(this);mismatch.setText("Verschil / ontbrekend bontotaal gecontroleerd");mismatch.setTextSize(13);mismatch.setTextColor(colors.ink);mismatch.setButtonTintList(ColorStateList.valueOf(colors.accent));mismatch.setMinHeight(dp(48));mismatch.setOnCheckedChangeListener((b,checked)->acknowledged=checked);footer.addView(mismatch);
         saveButton=button("Alles opslaan",this::saveAll,true);saveButton.setTag("saveAll");footer.addView(saveButton,new LinearLayout.LayoutParams(-1,dp(50)));root.addView(footer);
         if(readOnly){receiptTotal.setEnabled(false);saveButton.setVisibility(View.GONE);mismatch.setVisibility(View.GONE);}
         initializing=false;updateTotals();if(busy)enable(body,false);
+        root.getViewTreeObserver().addOnGlobalLayoutListener(()->{
+            Rect visible=new Rect();root.getWindowVisibleDisplayFrame(visible);int full=getWindow().getDecorView().getHeight();
+            boolean keyboard=full-visible.height()>dp(150);
+            if(keyboard!=keyboardVisible){keyboardVisible=keyboard;updateTotals();}
+        });
     }
     private void renderLine(ReceiptParser.Line l){
         LinearLayout row=new LinearLayout(this);row.setOrientation(1);row.setPadding(dp(8),dp(8),dp(8),dp(10));row.setBackground(shape(colors.card));LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,-2);rp.bottomMargin=dp(10);body.addView(row,rp);
@@ -158,10 +163,11 @@ public class ReceiptActivity extends Activity {
     }
     private void enable(View view,boolean enabled){view.setEnabled(enabled);if(view instanceof android.view.ViewGroup){ViewGroup g=(ViewGroup)view;for(int i=0;i<g.getChildCount();i++)enable(g.getChildAt(i),enabled);}}
     private void updateTotals(){
-        if(totals==null)return;long total=draft.total();totals.setText("Berekend: "+euro(total));Integer target=ReceiptParser.money(draft.totalText);
+        if(totals==null)return;long total=draft.total();Integer target=ReceiptParser.money(draft.totalText);totals.setText("Berekend: "+euro(total)+"   ·   Bon: "+(target==null?"—":euro(target)));
+        totals.setVisibility(keyboardVisible?View.GONE:View.VISIBLE);warning.setVisibility(keyboardVisible?View.GONE:View.VISIBLE);
         boolean differs=target==null||target<0||total!=target;
         warning.setText(!invalid.isEmpty()?"Controleer de ongeldige invoer":target==null?"Bontotaal ontbreekt":total==target?"Totaal komt overeen":"Verschil: "+euro(total-target));
-        if(!readOnly){mismatch.setVisibility(differs?View.VISIBLE:View.GONE);if(!acknowledged&&mismatch.isChecked())mismatch.setChecked(false);saveButton.setEnabled(!busy&&!draftFailed&&invalid.isEmpty());}
+        if(!readOnly){mismatch.setVisibility(differs&&!keyboardVisible?View.VISIBLE:View.GONE);if(!acknowledged&&mismatch.isChecked())mismatch.setChecked(false);saveButton.setEnabled(!busy&&!draftFailed&&invalid.isEmpty());}
     }
     private boolean persist(){
         if(readOnly||draft==null)return true;
@@ -238,6 +244,7 @@ public class ReceiptActivity extends Activity {
     private static void appendRow(StringBuilder out,ArrayList<Text.Line> row){Collections.sort(row,(a,b)->Integer.compare(a.getBoundingBox().left,b.getBoundingBox().left));if(row.isEmpty())return;for(Text.Line l:row){if(out.length()>0&&out.charAt(out.length()-1)!='\n')out.append(' ');out.append(l.getText());}out.append('\n');}
     private void saveAll(){
         if(busy||readOnly||WORKING.get())return;
+        InputMethodManager keyboard=(InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);if(keyboard!=null)keyboard.hideSoftInputFromWindow(root.getWindowToken(),0);
         try{
             if(hasPendingWork())throw new IllegalArgumentException("Lees eerst de resterende foto’s of verwijder het ongelezen bondeel");
             draft.validate();Integer target=ReceiptParser.money(draft.totalText);

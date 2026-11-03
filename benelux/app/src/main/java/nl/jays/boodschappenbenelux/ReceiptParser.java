@@ -23,7 +23,7 @@ final class ReceiptParser {
             if(n.signum()<=0||n.compareTo(new BigDecimal("10000"))>0||unit<0)throw new IllegalArgumentException("Aantal of prijs ongeldig");
             int total=n.multiply(BigDecimal.valueOf(unit)).setScale(0,RoundingMode.HALF_UP).intValueExact();
             if(total>100000000)throw new IllegalArgumentException("Bedrag te groot");
-            quantity=n.stripTrailingZeros().toPlainString();unitCents=unit;cents=(type.equals(DISCOUNT)||type.equals(RETURN))?-total:total;
+            quantity=n.stripTrailingZeros().toPlainString();unitCents=unit;cents=(type.equals(DISCOUNT)||type.equals(RETURN)||(type.equals(DEPOSIT)&&cents<0))?-total:total;
         }
     }
     static final class Document {

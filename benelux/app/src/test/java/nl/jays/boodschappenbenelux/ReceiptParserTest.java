@@ -25,4 +25,6 @@ public class ReceiptParserTest {
  @Test public void leadingQuantityIsProposedWithWarning(){ReceiptParser.Line l=ReceiptParser.parse("2 COLA 2,98").get(0);assertEquals("2",l.quantity);assertEquals(149,l.unitCents);assertTrue(l.uncertain);}
  @Test public void packSizeIsNotQuantity(){ReceiptParser.Line l=ReceiptParser.parse("500 g GOUDA 2,99").get(0);assertEquals("1",l.quantity);}
 
+ @Test public void editedReturnedPfandKeepsNegativeSign(){ReceiptParser.Line l=new ReceiptParser.Line("Leergut",-25);l.type=ReceiptParser.DEPOSIT;l.setQuantityAndUnit("2",25);assertEquals(-50,l.net());}
+
 }
