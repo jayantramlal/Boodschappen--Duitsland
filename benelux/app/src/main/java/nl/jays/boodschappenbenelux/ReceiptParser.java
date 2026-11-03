@@ -152,6 +152,6 @@ final class ReceiptParser {
                 if(same){overlap=n;break;}
             }
             for(int i=overlap;i<next.size();i++)merged.add(next.get(i));
-        }return String.join("\n",merged);
+        }StringBuilder result=new StringBuilder();for(String line:merged){if(result.length()>0)result.append('\n');result.append(line);}return result.toString();
     }
 }

@@ -13,7 +13,7 @@ final class ReceiptDraft {
     static final class Page {
         String file="",hash="",text="";boolean done,qualityWarning;
     }
-    long total(){long n=0;for(ReceiptParser.Line line:lines)n=Math.addExact(n,line.net());return n;}
+    long total(){long n=0;for(ReceiptParser.Line line:lines)n+=line.net();return n;}
     void recognize(){
         ArrayList<String> parts=new ArrayList<>();for(Page p:pages)if(p.done)parts.add(p.text);
         String merged=ReceiptParser.mergePages(parts);if(merged.equals(raw))return;
@@ -44,7 +44,7 @@ final class ReceiptDraft {
             if(l.label.trim().isEmpty())throw new IllegalArgumentException("Vul alle productnamen in");
             if(!Arrays.asList(ReceiptParser.PRODUCT,ReceiptParser.DISCOUNT,ReceiptParser.DEPOSIT,ReceiptParser.RETURN).contains(l.type))throw new IllegalArgumentException("Ongeldig regeltype");
             try {java.math.BigDecimal q=new java.math.BigDecimal(l.quantity.replace(',','.'));
-                if(q.signum()<=0||q.compareTo(new java.math.BigDecimal("10000"))>0)throw new Exception();
+                if(q.signum()<=0||q.compareTo(new java.math.BigDecimal("10000"))>0)throw new Exception();l.quantity=q.stripTrailingZeros().toPlainString();
                 if(l.unitText!=null&&(ReceiptParser.money(l.unitText)==null||ReceiptParser.money(l.unitText)<0))throw new Exception();
                 if(l.discountText!=null&&(ReceiptParser.money(l.discountText)==null||ReceiptParser.money(l.discountText)<0))throw new Exception();
                 if(l.discountCents<0||l.discountCents>Math.max(0,l.cents)||Math.abs((long)l.cents)>100000000)throw new Exception();

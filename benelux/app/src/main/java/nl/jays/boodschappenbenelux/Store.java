@@ -84,8 +84,8 @@ final class Store extends SQLiteOpenHelper {
                     ContentValues product=new ContentValues();product.put("barcode",barcode);product.put("name",l.label.trim());product.put("size","");product.put("image_url","");
                     // Never replace an existing product's name, size, image, or shopping list relation.
                     d.insertWithOnConflict("products",null,product,SQLiteDatabase.CONFLICT_IGNORE);
-                    quantities.put(barcode,quantities.getOrDefault(barcode,java.math.BigDecimal.ZERO).add(new java.math.BigDecimal(l.quantity)));
-                    amounts.put(barcode,amounts.getOrDefault(barcode,0L)+l.net());
+                    quantities.put(barcode,(quantities.containsKey(barcode)?quantities.get(barcode):java.math.BigDecimal.ZERO).add(new java.math.BigDecimal(l.quantity)));
+                    amounts.put(barcode,(amounts.containsKey(barcode)?amounts.get(barcode):0L)+l.net());
                 }
             }
             for(String barcode:quantities.keySet()){

@@ -26,14 +26,19 @@ jobs:
           test -s benelux/app/release.jks
           test -s benelux/app/signing.env
       - name: Test bonparser, concepten en database-upgrade
-        run: cd benelux && gradle --no-daemon :app:testDebugUnitTest
+        run: |
+          cd benelux
+          gradle --no-daemon :app:testDebugUnitTest
+          python3 scripts/test_summary.py
       - name: Bouw release APK
         run: cd benelux && gradle --no-daemon :app:assembleRelease
       - name: APK bewaren
         uses: actions/upload-artifact@v4
         with:
           name: Boodschappen-BeNeLux-Duitsland-1.0.8
-          path: benelux/app/build/outputs/apk/release/app-release.apk
+          path: |
+            benelux/app/build/outputs/apk/release/app-release.apk
+            benelux/app/build/test-results/testDebugUnitTest/*.xml
           if-no-files-found: error
           retention-days: 10
 

@@ -169,24 +169,24 @@ public class ReceiptActivity extends Activity {
     }
     @Override protected void onPause(){if(!busy)persist();super.onPause();}
     @Override public void onBackPressed(){if(readOnly){finish();return;}if(busy){finish();return;}if(persist())finish();}
-    private void gallery(){if(busy||scannerOpening)return;persist();Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("image/*");i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);try{startActivityForResult(i,GALLERY);}catch(Exception e){toast("Geen fotokiezer beschikbaar");}}
+    private void gallery(){if(busy||scannerOpening)return;persist();Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("image/*");i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);try{scannerOpening=true;startActivityForResult(i,GALLERY);}catch(Exception e){scannerOpening=false;toast("Geen fotokiezer beschikbaar");}}
     private void manualPhoto(){
         if(busy||scannerOpening)return;if(!persist())return;
         try{File directory=new File(getCacheDir(),"receipt-camera");if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("Geen opslagruimte");File f=new File(directory,"receipt-camera.jpg");Uri u=FileProvider.getUriForFile(this,getPackageName()+".receiptfiles",f);
-            Intent i=new Intent("android.media.action.IMAGE_CAPTURE");i.putExtra(android.provider.MediaStore.EXTRA_OUTPUT,u);i.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_READ_URI_PERMISSION);i.setClipData(ClipData.newRawUri("Bonfoto",u));startActivityForResult(i,PHOTO);
-        }catch(Exception e){toast("Camera niet beschikbaar. Kies een bestaande foto.");}
+            Intent i=new Intent("android.media.action.IMAGE_CAPTURE");i.putExtra(android.provider.MediaStore.EXTRA_OUTPUT,u);i.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_READ_URI_PERMISSION);i.setClipData(ClipData.newRawUri("Bonfoto",u));scannerOpening=true;startActivityForResult(i,PHOTO);
+        }catch(Exception e){scannerOpening=false;toast("Camera niet beschikbaar. Kies een bestaande foto.");}
     }
     private void openScanner(){
         if(busy||scannerOpening)return;if(!persist())return;scannerOpening=true;
         try{GmsDocumentScannerOptions options=new GmsDocumentScannerOptions.Builder().setGalleryImportAllowed(true).setPageLimit(30).setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_JPEG).setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL).build();
             GmsDocumentScanning.getClient(options).getStartScanIntent(this).addOnSuccessListener(sender->{
-                scannerOpening=false;if(isFinishing()||isDestroyed())return;
-                try{startIntentSenderForResult(sender,DOCUMENT,null,0,0,0);}catch(Exception e){toast("Automatische scanner niet beschikbaar");manualPhoto();}
+                if(isFinishing()||isDestroyed()){scannerOpening=false;return;}
+                try{startIntentSenderForResult(sender,DOCUMENT,null,0,0,0);}catch(Exception e){scannerOpening=false;toast("Automatische scanner niet beschikbaar");manualPhoto();}
             }).addOnFailureListener(e->{scannerOpening=false;if(!isFinishing()){toast("Automatische scanner niet beschikbaar. Handmatige camera wordt geopend.");manualPhoto();}});
         }catch(Exception e){scannerOpening=false;toast("Automatische scanner niet beschikbaar");manualPhoto();}
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
-        super.onActivityResult(request,result,data);if(result!=RESULT_OK)return;
+        super.onActivityResult(request,result,data);scannerOpening=false;if(result!=RESULT_OK)return;
         ArrayList<Uri> uris=new ArrayList<>();
         try{
             if(request==DOCUMENT){GmsDocumentScanningResult r=GmsDocumentScanningResult.fromActivityResultIntent(data);if(r!=null&&r.getPages()!=null)for(GmsDocumentScanningResult.Page p:r.getPages())uris.add(p.getImageUri());}
@@ -230,12 +230,12 @@ public class ReceiptActivity extends Activity {
     private void waitForWork(){MAIN.postDelayed(()->{if(isFinishing()||isDestroyed())return;if(WORKING.get()){waitForWork();return;}try{ReceiptDraft loaded=files.load();if(loaded!=null)draft=loaded;busy=false;render();if(hasPendingWork())addButton("Verder lezen",this::process);}catch(Exception e){busy=false;showRecoveryError();}},350);}
     static String orderedText(Text result){
         ArrayList<Text.Line> lines=new ArrayList<>();for(Text.TextBlock block:result.getTextBlocks())lines.addAll(block.getLines());
-        lines.sort((a,b)->{android.graphics.Rect x=a.getBoundingBox(),y=b.getBoundingBox();if(x==null||y==null)return 0;return Integer.compare(x.centerY(),y.centerY());});
+        Collections.sort(lines,(a,b)->{android.graphics.Rect x=a.getBoundingBox(),y=b.getBoundingBox();if(x==null||y==null)return 0;return Integer.compare(x.centerY(),y.centerY());});
         StringBuilder raw=new StringBuilder();ArrayList<Text.Line> row=new ArrayList<>();int center=0,height=0;
         for(Text.Line l:lines){Rect r=l.getBoundingBox();if(r==null)continue;if(!row.isEmpty()&&Math.abs(r.centerY()-center)>Math.max(height,r.height())*.55){appendRow(raw,row);row.clear();}row.add(l);center=r.centerY();height=r.height();}
         appendRow(raw,row);return raw.toString();
     }
-    private static void appendRow(StringBuilder out,ArrayList<Text.Line> row){row.sort((a,b)->Integer.compare(a.getBoundingBox().left,b.getBoundingBox().left));if(row.isEmpty())return;for(Text.Line l:row){if(out.length()>0&&out.charAt(out.length()-1)!='\n')out.append(' ');out.append(l.getText());}out.append('\n');}
+    private static void appendRow(StringBuilder out,ArrayList<Text.Line> row){Collections.sort(row,(a,b)->Integer.compare(a.getBoundingBox().left,b.getBoundingBox().left));if(row.isEmpty())return;for(Text.Line l:row){if(out.length()>0&&out.charAt(out.length()-1)!='\n')out.append(' ');out.append(l.getText());}out.append('\n');}
     private void saveAll(){
         if(busy||readOnly||WORKING.get())return;
         try{
